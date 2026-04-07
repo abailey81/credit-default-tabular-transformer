@@ -1,0 +1,42 @@
+# ── Python ──
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# ── Virtual environments ──
+.venv/
+venv/
+env/
+
+# ── IDE ──
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# ── OS ──
+.DS_Store
+Thumbs.db
+
+# ── Data (large files — download separately) ──
+data/raw/*.xls
+data/raw/*.xlsx
+data/raw/*.csv
+data/processed/*.csv
+
+# ── Jupyter ──
+.ipynb_checkpoints/
+
+# ── Claude Code ──
+.claude/
+
+# ── Misc ──
+*.log
+*.pdf
+.env

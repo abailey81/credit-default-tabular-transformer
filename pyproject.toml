@@ -1,0 +1,58 @@
+[tool.poetry]
+name = "credit-default-tabular-transformer"
+version = "1.0.0"
+description = "From-Scratch Transformer Language Model vs Random Forest for Tabular Credit Risk"
+authors = ["abailey81"]
+readme = "README.md"
+license = "MIT"
+packages = [{ include = "src" }]
+
+[tool.poetry.dependencies]
+python = ">=3.9,<4.0"
+numpy = "^1.24"
+pandas = "^2.0"
+scipy = "^1.10"
+scikit-learn = "^1.2"
+matplotlib = "^3.7"
+seaborn = "^0.12"
+openpyxl = "^3.1"
+xlrd = "^2.0"
+ucimlrepo = "^0.0.7"
+jinja2 = "^3.1.6"
+
+[tool.poetry.group.dev.dependencies]
+pytest = "^7.4"
+pytest-cov = "^4.1"
+ruff = "^0.1"
+black = "^23.0"
+mypy = "^1.5"
+pre-commit = "^3.4"
+jupyter = "^1.1.1"
+
+[tool.poetry.scripts]
+run-pipeline = "run_pipeline:main"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.ruff]
+line-length = 100
+target-version = "py39"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "W", "UP"]
+
+[tool.black]
+line-length = 100
+target-version = ["py39"]
+
+[tool.mypy]
+python_version = "3.9"
+warn_return_any = true
+warn_unused_configs = true
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "--cov=src --cov-report=term-missing"

@@ -1,0 +1,45 @@
+{
+  "n_rows": 30000,
+  "n_cols": 24,
+  "missing_values": {
+    "LIMIT_BAL": 0,
+    "SEX": 0,
+    "EDUCATION": 0,
+    "MARRIAGE": 0,
+    "AGE": 0,
+    "PAY_0": 0,
+    "PAY_2": 0,
+    "PAY_3": 0,
+    "PAY_4": 0,
+    "PAY_5": 0,
+    "PAY_6": 0,
+    "BILL_AMT1": 0,
+    "BILL_AMT2": 0,
+    "BILL_AMT3": 0,
+    "BILL_AMT4": 0,
+    "BILL_AMT5": 0,
+    "BILL_AMT6": 0,
+    "PAY_AMT1": 0,
+    "PAY_AMT2": 0,
+    "PAY_AMT3": 0,
+    "PAY_AMT4": 0,
+    "PAY_AMT5": 0,
+    "PAY_AMT6": 0,
+    "DEFAULT": 0
+  },
+  "total_missing": 0,
+  "duplicated_rows": 35,
+  "target_distribution": {
+    "0": 23364,
+    "1": 6636
+  },
+  "issues": [
+    "Found 35 duplicate rows (0.12%)"
+  ],
+  "BILL_AMT1_negative_count": 590,
+  "BILL_AMT2_negative_count": 669,
+  "BILL_AMT3_negative_count": 655,
+  "BILL_AMT4_negative_count": 675,
+  "BILL_AMT5_negative_count": 655,
+  "BILL_AMT6_negative_count": 688
+}
