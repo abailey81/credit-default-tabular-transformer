@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """
-run_pipeline.py -- Master entry point for the EDA & Preprocessing pipeline.
+run_pipeline.py -- Master entry point for the full project pipeline.
 
 Usage:
-    poetry run python run_pipeline.py                    # Run both EDA and preprocessing
+    poetry run python run_pipeline.py                    # Run EDA + preprocessing
     poetry run python run_pipeline.py --eda-only         # Run only EDA (figures)
     poetry run python run_pipeline.py --preprocess-only  # Run only preprocessing (data splits)
+    poetry run python run_pipeline.py --rf-benchmark     # Run only Random Forest benchmark
     poetry run python run_pipeline.py --data-path FILE   # Use local .xls/.xlsx file
 
 If no --data-path is provided, the dataset is fetched automatically from the
@@ -29,12 +30,13 @@ from eda import run_eda
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Credit Card Default -- EDA & Preprocessing Pipeline",
+        description="Credit Card Default -- EDA, Preprocessing & RF Benchmark Pipeline",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--eda-only", action="store_true", help="Run EDA only (generates figures)")
     mode.add_argument("--preprocess-only", action="store_true", help="Run preprocessing only (generates data splits)")
+    mode.add_argument("--rf-benchmark", action="store_true", help="Run Random Forest benchmark only (training + evaluation)")
     parser.add_argument(
         "--data-path",
         default=None,
@@ -66,6 +68,17 @@ def main():
         print("  RUNNING: Data Preprocessing Pipeline")
         print("=" * 60)
         run_preprocessing_pipeline(data_path, output_dir="data/processed")
+
+    elif args.rf_benchmark:
+        from random_forest import run_rf_benchmark
+        print("=" * 60)
+        print("  RUNNING: Random Forest Benchmark")
+        print("=" * 60)
+        run_rf_benchmark(
+            data_path,
+            output_dir="results",
+            figure_dir="figures",
+        )
 
     else:
         print("=" * 60)
