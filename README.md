@@ -32,7 +32,7 @@ This project develops two models for predicting credit card default on the [UCI 
 
 The dataset contains **6 monthly snapshots** of payment behaviour (April--September 2005) per client. The EDA in this repository reveals clear temporal divergence between defaulters and non-defaulters, motivating a sequence-aware architecture.
 
-> This repository currently contains **Steps 1--2** (EDA and data preprocessing). The transformer, Random Forest, and experiments are implemented in subsequent steps.
+> This repository currently contains **Steps 1--2 and 5** (EDA, data preprocessing, and the Random Forest benchmark). The transformer and experiments are implemented in subsequent steps.
 
 ### Dataset
 
@@ -56,7 +56,7 @@ The dataset contains **6 monthly snapshots** of payment behaviour (April--Septem
 | **2** | Data Preprocessing | `DONE` | Schema normalisation, categorical cleaning, 22 engineered features, stratified 70/15/15 split, leak-free scaling, tokeniser metadata export. |
 | **3** | Tabular Tokenisation | `TODO` | Convert each record into an ordered token sequence. Hybrid scheme for categorical, ordinal, and continuous features. |
 | **4** | Transformer (From Scratch) | `TODO` | Embedding, positional encoding, multi-head self-attention, transformer blocks, classification head. Built with PyTorch primitives only. |
-| **5** | Random Forest Benchmark | `TODO` | Hyperparameter-tuned Random Forest on engineered features. |
+| **5** | Random Forest Benchmark | `DONE` | Hyperparameter-tuned Random Forest on engineered features. 60-iter RandomizedSearchCV, dual importance, threshold optimisation. |
 | **6** | Experiments & Comparison | `TODO` | Metrics (AUC-ROC, F1, precision-recall), attention visualisation, ablation studies, limitations. |
 
 <br>
@@ -129,16 +129,18 @@ credit-default-tabular-transformer/
 │
 ├── pyproject.toml              # Poetry configuration and dependencies
 ├── poetry.lock                 # Locked dependency versions
-├── run_pipeline.py             # CLI entry point
+├── run_pipeline.py             # CLI entry point (EDA, preprocessing, RF benchmark)
 │
 ├── notebooks/
 │   ├── 01_exploratory_data_analysis.ipynb   # Full EDA with statistical tests
-│   └── 02_data_preprocessing.ipynb          # Preprocessing pipeline walkthrough
+│   ├── 02_data_preprocessing.ipynb          # Preprocessing pipeline walkthrough
+│   └── 03_random_forest_benchmark.ipynb     # RF training, tuning, evaluation, importance
 │
 ├── src/
 │   ├── __init__.py
 │   ├── data_preprocessing.py   # Data loading, cleaning, engineering, splitting, scaling
-│   └── eda.py                  # 12 publication-quality visualisations
+│   ├── eda.py                  # 12 publication-quality visualisations
+│   └── random_forest.py        # RF benchmark: tuning, evaluation, importance, figures
 │
 ├── data/
 │   ├── raw/                    # Dataset source (not tracked --- fetched via ucimlrepo)
@@ -146,9 +148,9 @@ credit-default-tabular-transformer/
 │       ├── feature_metadata.json    # Category mappings for tokeniser
 │       └── validation_report.json   # Data quality audit
 │
-├── figures/                    # EDA figures (300 DPI)
+├── figures/                    # EDA + RF figures (300 DPI)
 │
-├── results/                    # Summary statistics (CSV + LaTeX)
+├── results/                    # Summary statistics + RF results (CSV, JSON, LaTeX)
 │
 └── docs/
     └── coursework_spec.md      # Assignment specification
@@ -206,6 +208,9 @@ poetry run python run_pipeline.py --eda-only
 # Preprocessing only
 poetry run python run_pipeline.py --preprocess-only
 
+# Random Forest benchmark (training + tuning + evaluation)
+poetry run python run_pipeline.py --rf-benchmark
+
 # With a local file
 poetry run python run_pipeline.py --data-path "data/raw/default of credit card clients.xls"
 ```
@@ -220,6 +225,7 @@ poetry run jupyter notebook notebooks/
 |:---|:---|
 | `01_exploratory_data_analysis.ipynb` | 20+ visualisations, statistical tests (Wilson CI, KS, Mann-Whitney U, Cohen's d, Cramer's V, D'Agostino, VIF, mutual information) |
 | `02_data_preprocessing.ipynb` | Cleaning, validation, feature engineering, stratified splitting, scaling, metadata export |
+| `03_random_forest_benchmark.ipynb` | Baseline vs tuned RF, hyperparameter analysis, feature importance (Gini + permutation), threshold optimisation, cross-validation |
 
 <br>
 
@@ -366,6 +372,53 @@ Feature Engineering (22 features) ──> Stratified Split (70/15/15)
 | Bill dynamics | 2 | Linear slope, average utilisation |
 | Payment dynamics | 2 | Average payment, payment volatility |
 | Balance totals | 1 | Aggregate payment-to-bill ratio |
+
+<br>
+
+## Random Forest Benchmark
+
+The RF benchmark (`src/random_forest.py`) provides a strong tree-based baseline for comparison against the Transformer. It reuses the **shared preprocessing pipeline** to ensure identical data transformations.
+
+### Pipeline
+
+```
+Shared Pipeline (data_preprocessing.py)
+    │
+    ├── Load → Normalise → Clean → Engineer (45 features)
+    └── Stratified Split (70/15/15)
+                │
+                v
+        Baseline RF (100 trees, defaults)
+                │
+                v
+        RandomizedSearchCV (60 iter × 5-fold CV)
+                │
+                v
+        Tuned RF → Evaluate (val + test)
+                │
+    ┌───────────┼───────────────────────┐
+    v           v                       v
+5-fold CV   Feature Importance    Threshold Optimisation
+            (Gini + Permutation)  (max F1 on val set)
+    │           │                       │
+    v           v                       v
+Results:  rf_metrics.csv, rf_feature_importance.csv,
+          rf_cross_validation.csv, rf_config.json
+Figures:  rf_roc_pr_curves.png, rf_confusion_matrix.png,
+          rf_feature_importance.png, rf_threshold_analysis.png,
+          rf_tuning_analysis.png
+```
+
+### Hyperparameter Search Space
+
+| Parameter | Values | Rationale |
+|:---|:---|:---|
+| `n_estimators` | 100, 200, 300, 500 | Ensemble size vs compute trade-off |
+| `max_depth` | 5, 10, 15, 20, None | Bias--variance control |
+| `min_samples_split` | 2, 5, 10 | Split regularisation |
+| `min_samples_leaf` | 1, 2, 4 | Leaf-level smoothing |
+| `max_features` | sqrt, log2 | Tree decorrelation |
+| `class_weight` | None, balanced, balanced_subsample | Class imbalance handling |
 
 <br>
 
