@@ -17,7 +17,6 @@ Result: 23 tokens per client (9 categorical + 14 numerical).
 import json
 from typing import Dict, List, Tuple
 
-import numpy as np
 import pandas as pd
 import torch
 from torch.utils.data import Dataset
@@ -132,28 +131,29 @@ def build_numerical_vocab() -> Dict[str, int]:
 def tokenize_row(
     row: pd.Series,
     cat_vocab: Dict[str, int],
-    num_vocab: Dict[str, int],
-) -> Tuple[List[int], List[int], List[float], int]:
+) -> Tuple[List[int], List[float], int]:
     """
     Convert a single DataFrame row (one client) into token indices and values.
 
     Steps:
         1. For each categorical feature: look up its value, build the token name
            (e.g. "SEX_2"), and find the index in cat_vocab.
-        2. For each numerical feature: look up its index in num_vocab, and store
-           the raw numerical value separately.
+        2. For each numerical feature: store the raw value. The position in the
+           list implicitly identifies the feature (always in NUMERICAL_FEATURES order),
+           so per-row feature index lists are unnecessary — the transformer's
+           embedding module generates the shared index tensor torch.arange(14)
+           internally.
         3. Read the target label (DEFAULT).
 
     Args:
         row:       One row from a pandas DataFrame (e.g. df.iloc[0]).
         cat_vocab: Categorical vocabulary from build_categorical_vocab().
-        num_vocab: Numerical vocabulary from build_numerical_vocab().
 
     Returns:
-        cat_token_ids:   List of 9 ints  — indices into categorical embedding table.
-        num_feature_ids: List of 14 ints — indices into numerical embedding table.
-        num_values:      List of 14 floats — the actual numerical values.
-        label:           int (0 or 1) — default / no default.
+        cat_token_ids: List of 9 ints   — indices into categorical embedding table.
+        num_values:    List of 14 floats — scaled numerical values, in the order
+                                            defined by NUMERICAL_FEATURES.
+        label:         int (0 or 1)     — default / no default.
     """
     # --- Step 1: Categorical features → token indices ---
     cat_token_ids = []
@@ -162,17 +162,14 @@ def tokenize_row(
         token_name = f"{feature}_{int(value)}"        # e.g. "SEX_2"
         cat_token_ids.append(cat_vocab[token_name])   # e.g. "SEX_2" → 1
 
-    # --- Step 2: Numerical features → feature indices + values ---
-    num_feature_ids = []
-    num_values = []
-    for feature in NUMERICAL_FEATURES:
-        num_feature_ids.append(num_vocab[feature])    # e.g. "LIMIT_BAL" → 0
-        num_values.append(float(row[feature]))        # e.g. 50000.0
+    # --- Step 2: Numerical features → values only ---
+    # Order is fixed by NUMERICAL_FEATURES, so position carries feature identity.
+    num_values = [float(row[feature]) for feature in NUMERICAL_FEATURES]
 
     # --- Step 3: Target label ---
     label = int(row[TARGET_COL])                      # 0 or 1
 
-    return cat_token_ids, num_feature_ids, num_values, label
+    return cat_token_ids, num_values, label
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -192,10 +189,9 @@ class CreditDefaultDataset(Dataset):
     Usage:
         metadata = json.load(open("data/processed/feature_metadata.json"))
         cat_vocab = build_categorical_vocab(metadata)
-        num_vocab = build_numerical_vocab()
 
         train_df = pd.read_csv("data/processed/train_scaled.csv")
-        dataset = CreditDefaultDataset(train_df, cat_vocab, num_vocab)
+        dataset = CreditDefaultDataset(train_df, cat_vocab)
 
         # Single client
         sample = dataset[0]
@@ -208,7 +204,6 @@ class CreditDefaultDataset(Dataset):
         self,
         df: pd.DataFrame,
         cat_vocab: Dict[str, int],
-        num_vocab: Dict[str, int],
     ):
         """
         Tokenize all rows in the DataFrame and store results.
@@ -216,19 +211,16 @@ class CreditDefaultDataset(Dataset):
         Args:
             df:        Preprocessed DataFrame (e.g. train_scaled.csv loaded as DataFrame).
             cat_vocab: Categorical vocabulary from build_categorical_vocab().
-            num_vocab: Numerical vocabulary from build_numerical_vocab().
         """
         self.all_cat_ids = []       # will hold N lists of 9 ints each
-        self.all_num_ids = []       # will hold N lists of 14 ints each
         self.all_num_vals = []      # will hold N lists of 14 floats each
         self.all_labels = []        # will hold N ints
 
         # Tokenize every row once at creation time
         for i in range(len(df)):
             row = df.iloc[i]
-            cat_ids, num_ids, num_vals, label = tokenize_row(row, cat_vocab, num_vocab)
+            cat_ids, num_vals, label = tokenize_row(row, cat_vocab)
             self.all_cat_ids.append(cat_ids)
-            self.all_num_ids.append(num_ids)
             self.all_num_vals.append(num_vals)
             self.all_labels.append(label)
 
@@ -248,15 +240,14 @@ class CreditDefaultDataset(Dataset):
             idx: Client index (0 to len-1).
 
         Returns:
-            Dictionary with four tensors:
-                cat_token_ids:   [9]  — long tensor, indices for categorical embedding
-                num_feature_ids: [14] — long tensor, indices for numerical embedding
-                num_values:      [14] — float tensor, scaled numerical values
-                label:           []   — float tensor, 0.0 or 1.0
+            Dictionary with three tensors:
+                cat_token_ids: [9]  — long tensor, indices for categorical embedding
+                num_values:    [14] — float tensor, scaled numerical values
+                                       (position implies feature identity)
+                label:         []   — float tensor, 0.0 or 1.0
         """
         return {
-            "cat_token_ids":   torch.tensor(self.all_cat_ids[idx], dtype=torch.long),
-            "num_feature_ids": torch.tensor(self.all_num_ids[idx], dtype=torch.long),
-            "num_values":      torch.tensor(self.all_num_vals[idx], dtype=torch.float),
-            "label":           torch.tensor(self.all_labels[idx], dtype=torch.float),
+            "cat_token_ids": torch.tensor(self.all_cat_ids[idx], dtype=torch.long),
+            "num_values":    torch.tensor(self.all_num_vals[idx], dtype=torch.float),
+            "label":         torch.tensor(self.all_labels[idx], dtype=torch.float),
         }
