@@ -6,7 +6,9 @@ This module implements the complete Random Forest pipeline that serves as the
 baseline benchmark against the from-scratch Transformer model.
 
 Pipeline steps:
-  1. Data ingestion via shared preprocessing (data_preprocessing.py)
+  1. Data ingestion via shared preprocessing (data_preprocessing.py), which
+     in turn delegates to the resilient multi-source loader in
+     :mod:`data_sources` (UCI API → local manual ``.xls`` fallback).
   2. Feature engineering (22+ derived features)
   3. Stratified 70/15/15 split with class-balance preservation
   4. Baseline Random Forest (default hyperparameters)
@@ -21,6 +23,8 @@ Pipeline steps:
 Design:
   - Reuses data_preprocessing.py for loading, cleaning, and engineering to
     guarantee identical transformations across RF and Transformer pipelines.
+  - Inherits the API → local fallback semantics for free, so the benchmark
+    runs end-to-end with or without network access.
   - Evaluates on AUC-ROC (primary) and F1 (secondary) as class-imbalance-robust
     metrics; accuracy reported but not used for model selection.
   - Threshold optimised on the validation set exclusively; test-set metrics

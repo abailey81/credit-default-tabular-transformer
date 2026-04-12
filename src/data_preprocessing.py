@@ -4,14 +4,20 @@ for the UCI Credit Card Default dataset.
 
 Reference: Yeh, I.C. & Lien, C.H. (2009). Expert Systems with Applications, 36(2), 2473–2480.
 
-This module handles:
-    1. Raw data ingestion (XLS format from UCI repository)
+Pipeline stages
+---------------
+    1. Raw data ingestion via :mod:`data_sources` — a layered, provenance-aware
+       loader that tries the UCI ML Repository API first and gracefully falls
+       over to the locally-shipped manual ``.xls`` dataset on failure.
     2. Schema validation and column renaming
     3. Cleaning of undocumented categorical codes
     4. Feature engineering (utilisation ratios, repayment ratios, delinquency aggregates)
     5. Stratified train / validation / test splitting
     6. Standardisation of numerical features (fitted on train only to prevent leakage)
     7. Metadata export for downstream tokenisation
+
+The same fallback semantics apply whether this module is invoked from the
+CLI (``run_pipeline.py``), a notebook, or the Random Forest benchmark.
 """
 
 import os

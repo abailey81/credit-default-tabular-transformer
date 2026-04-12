@@ -15,7 +15,7 @@
 
 <br>
 
-[Overview](#overview) · [Roadmap](#project-roadmap) · [Key Findings](#key-eda-findings) · [Structure](#repository-structure) · [Getting Started](#getting-started) · [EDA Gallery](#exploratory-data-analysis-gallery) · [Pipeline](#preprocessing-pipeline) · [References](#references)
+[Overview](#overview) · [Roadmap](#project-roadmap) · [Key Findings](#key-eda-findings) · [Structure](#repository-structure) · [Getting Started](#getting-started) · [EDA Gallery](#exploratory-data-analysis-gallery) · [Data Ingestion](#resilient-data-ingestion) · [Pipeline](#preprocessing-pipeline) · [References](#references)
 
 ---
 
@@ -52,6 +52,7 @@ The dataset contains **6 monthly snapshots** of payment behaviour (April--Septem
 
 | Step | Phase | Status | Description |
 |:---:|:---|:---:|:---|
+| **0** | Resilient Data Ingestion | `DONE` | Layered, provenance-aware loader: UCI ML Repository API with bounded retries, automatic fallback to a tracked offline `.xls`, every consumer routes through it. |
 | **1** | Exploratory Data Analysis | `DONE` | 12 figures with statistical tests. Temporal divergence, PAY semantics, feature importance, multicollinearity, outlier and normality diagnostics. |
 | **2** | Data Preprocessing | `DONE` | Schema normalisation, categorical cleaning, 22 engineered features, stratified 70/15/15 split, leak-free scaling, tokeniser metadata export. |
 | **3** | Tabular Tokenisation | `TODO` | Convert each record into an ordered token sequence. Hybrid scheme for categorical, ordinal, and continuous features. |
@@ -187,39 +188,15 @@ poetry install
 
 ### Data Loading
 
-The project ships with a **resilient multi-source data loader**
-([`src/data_sources.py`](src/data_sources.py)) that gracefully falls over
-from the remote UCI API to a locally-shipped Excel file. Every consumer of
-the data --- the EDA module, the preprocessing pipeline, the Random Forest
-benchmark, *and* the notebooks --- routes through this loader, so the same
-fallback semantics apply everywhere.
-
-| Mode | Behaviour |
-|:---|:---|
-| `auto` *(default)* | Try the UCI API first; on failure, automatically fall back to the local manual dataset. The API is retried up to **3 times** with exponential backoff before failover. |
-| `api` | UCI API only. Failures propagate as a hard error. |
-| `local` | Local manual dataset only --- never contacts the network. |
-| `--no-fallback` | In `auto` mode, disables the local fallback so any UCI failure becomes a hard error. |
-| `--data-path FILE` | Pin to a specific `.xls`/`.xlsx` file. Overrides `--source` and never contacts the network. |
-
-The manual fallback dataset
+By default, the dataset is fetched from the UCI ML Repository API. If the
+API is unavailable, the loader **automatically falls back** to the
+locally-tracked manual dataset
 [`data/raw/default_of_credit_card_clients.xls`](data/raw/default_of_credit_card_clients.xls)
-is tracked in the repository so the offline path always works out of the box,
-even on a fresh clone with no network access.
+--- so the entire pipeline (EDA, preprocessing, Random Forest benchmark,
+notebooks) runs out of the box on a fresh clone, even with no network access.
 
-```python
-# Programmatic use --- same loader the CLI and notebooks rely on.
-from data_sources import build_default_data_source
-
-source = build_default_data_source(mode="auto", allow_fallback=True)
-result = source.load()
-print(result.summary())              # provenance: source, origin, duration
-df = result.dataframe                # 30,000 x ~25 raw columns
-```
-
-Every successful load returns a `DataSourceResult` carrying the source name,
-origin URI, elapsed time, and a list of any failed attempts that triggered
-the fallback --- so you always know exactly where your data came from.
+See [Resilient Data Ingestion](#resilient-data-ingestion) below for the full
+architecture, source modes, and programmatic API.
 
 ### Run the Pipeline
 
@@ -361,6 +338,82 @@ Defaulters consistently repay a smaller fraction of their bill across all 6 mont
 
 <br>
 
+## Resilient Data Ingestion
+
+The dataset is loaded through [`src/data_sources.py`](src/data_sources.py),
+a layered, provenance-aware ingestion abstraction. Every consumer of the
+data --- the EDA module, the preprocessing pipeline, the Random Forest
+benchmark, and the notebooks --- delegates to it, so the same fallback
+semantics apply to the entire project.
+
+### Architecture
+
+```
+                  ┌──────────────────────────────────────┐
+                  │      ChainedDataSource (auto mode)    │
+                  │  ┌────────────────┐ ┌─────────────┐  │
+                  │  │ UCIRepoSource  │→│ LocalExcel- │  │
+                  │  │ (3x retries +  │  │ Source      │  │
+                  │  │ exp. backoff)  │  │ (fallback)  │  │
+                  │  └────────────────┘  └─────────────┘  │
+                  └───────────────────┬──────────────────┘
+                                      v
+                            DataSourceResult
+                            (df + provenance)
+```
+
+### Components
+
+| Class | Role |
+|:---|:---|
+| `DataSource` (ABC) | Abstract base — every source implements `name` and `load()`. |
+| `UCIRepoSource` | Fetches via the `ucimlrepo` package; retries up to **3** times with exponential backoff before raising. |
+| `LocalExcelSource` | Reads from a list of candidate `.xls`/`.xlsx` paths; resolves relative paths against both the cwd and the repository root. |
+| `ChainedDataSource` | Tries each child source in order, accumulating failures into the result so the fallback chain is fully auditable. |
+| `DataSourceResult` | Frozen dataclass carrying the dataframe, source name, source type, origin URI, elapsed time, and the list of failed attempts. |
+| `DataIngestionError` | Raised only when *every* configured source has failed. |
+| `build_default_data_source(...)` | Factory used by the rest of the codebase. Honours an explicit `data_path` as a hard pin (never silently hits the network). |
+
+### Source modes
+
+| Mode | Behaviour |
+|:---|:---|
+| `auto` *(default)* | Try the UCI API first; on failure, fall back automatically to the local manual dataset. |
+| `api` | UCI API only. Failures propagate as a hard error. |
+| `local` | Local manual dataset only --- never contacts the network. |
+| `--no-fallback` | In `auto` mode, disables the local fallback so any UCI failure becomes a hard error. |
+| `--data-path FILE` | Pin to a specific `.xls`/`.xlsx` file. Bypasses the chain entirely. |
+
+The manual fallback dataset
+[`data/raw/default_of_credit_card_clients.xls`](data/raw/default_of_credit_card_clients.xls)
+is **tracked in the repository** so the offline path always works on a fresh
+clone, even with no network access.
+
+### Programmatic use
+
+```python
+from data_sources import build_default_data_source
+
+source = build_default_data_source(mode="auto", allow_fallback=True)
+result = source.load()
+
+print(result.summary())
+# loaded 30,000 rows × 25 cols from UCI ML Repository (id=350) (...) in 1.42s
+# or, on fallback:
+# loaded 30,000 rows × 25 cols from Local fallback dataset (...) in 1.38s
+#   [after fallback from: UCI ML Repository (id=350)]
+
+df = result.dataframe
+for failed_name, err in result.failed_attempts:
+    print(f"  ↳ fell back from '{failed_name}': {err}")
+```
+
+`DataSourceResult` always tells you exactly where the data came from --- the
+source name, the origin URI, the wall-clock duration of the load, and the
+chain of failed attempts (if any) that triggered the fallback.
+
+<br>
+
 ## Preprocessing Pipeline
 
 ```
@@ -392,6 +445,7 @@ Feature Engineering (22 features) ──> Stratified Split (70/15/15)
 
 | Step | Operation | Detail |
 |:---|:---|:---|
+| **Ingestion** | Multi-source loader with fallback | UCI API (3x retries) → local `.xls` fallback; provenance reported via `DataSourceResult` |
 | **Schema** | Normalise column names | `PAY_1` to `PAY_0`, drop `ID` |
 | **Cleaning** | Merge undocumented codes | `EDUCATION {0,5,6}` to `4`, `MARRIAGE {0}` to `3` |
 | **Validation** | Data quality audit | 0 missing values, 35 duplicates (0.12%), all ranges valid |
@@ -422,7 +476,8 @@ The RF benchmark (`src/random_forest.py`) provides a strong tree-based baseline 
 ```
 Shared Pipeline (data_preprocessing.py)
     │
-    ├── Load → Normalise → Clean → Engineer (45 features)
+    ├── ChainedDataSource (UCI API → local .xls fallback)
+    ├── Normalise → Clean → Engineer (45 features)
     └── Stratified Split (70/15/15)
                 │
                 v

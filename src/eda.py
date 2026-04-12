@@ -12,6 +12,11 @@ Produces publication-quality figures that directly motivate modelling decisions:
   - Statistical tests for feature-target associations
 
 All figures are saved to the figures/ directory with descriptive filenames.
+
+Data is loaded through the shared :mod:`data_preprocessing` ingestion path,
+which delegates to :mod:`data_sources` for resilient API → local-fallback
+loading; passing ``mode="local"`` or ``--source local`` from the CLI runs the
+entire EDA without any network access.
 """
 
 import os
