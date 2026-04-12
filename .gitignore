@@ -40,3 +40,4 @@ data/processed/*.csv
 *.log
 *.pdf
 .env
+CLAUDE.md
