@@ -711,6 +711,9 @@ def run_rf_benchmark(
     n_iter: int = 60,
     n_cv_folds: int = 5,
     seed: int = RANDOM_SEED,
+    *,
+    mode: str = "auto",
+    allow_fallback: bool = True,
 ) -> Dict[str, Any]:
     """
     End-to-end Random Forest benchmark pipeline.
@@ -727,12 +730,16 @@ def run_rf_benchmark(
       9. Export all results
 
     Args:
-        data_path: Path to local .xls/.xlsx file, or None for UCI repo fetch.
+        data_path: Path to local .xls/.xlsx file. When set, bypasses the
+            chained loader and reads only the local file.
         output_dir: Directory for CSV/JSON result files.
         figure_dir: Directory for PNG figure files.
         n_iter: Number of random parameter combinations to try.
         n_cv_folds: Number of cross-validation folds.
         seed: Random seed for reproducibility.
+        mode: Data source mode (``"auto"``/``"api"``/``"local"``).
+            ``"auto"`` enables UCI API → local fallback ingestion.
+        allow_fallback: If False, disables fallback in ``"auto"`` mode.
 
     Returns:
         Dict containing all results, metrics, models, and file paths.
@@ -748,7 +755,7 @@ def run_rf_benchmark(
 
     # ── Step 1: Data pipeline (shared with Transformer) ──────────────────
     print("\n-- Step 1: Data Pipeline --")
-    df = load_raw_data(data_path)
+    df = load_raw_data(data_path, mode=mode, allow_fallback=allow_fallback)
     df = normalise_schema(df)
     df = clean_categoricals(df)
     df = engineer_features(df)

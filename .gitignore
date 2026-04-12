@@ -30,6 +30,11 @@ data/raw/*.xlsx
 data/raw/*.csv
 data/processed/*.csv
 
+# Manual fallback dataset — *tracked* so the offline loader has something
+# to fall back to when the UCI API is unreachable.
+!data/raw/default_of_credit_card_clients.xls
+!data/raw/default_of_credit_card_clients.xlsx
+
 # ── Jupyter ──
 .ipynb_checkpoints/
 

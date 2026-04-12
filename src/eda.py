@@ -800,15 +800,30 @@ def plot_repayment_ratio(df: pd.DataFrame, save_dir: str):
 # Master EDA runner
 # ──────────────────────────────────────────────────────────────────────────────
 
-def run_eda(data_path: Optional[str] = None, save_dir: str = "figures"):
-    """Run the complete EDA pipeline and generate all figures."""
+def run_eda(
+    data_path: Optional[str] = None,
+    save_dir: str = "figures",
+    *,
+    mode: str = "auto",
+    allow_fallback: bool = True,
+):
+    """
+    Run the complete EDA pipeline and generate all figures.
+
+    Args:
+        data_path: Optional explicit local .xls/.xlsx file. Bypasses the
+            chained loader when set.
+        save_dir: Output directory for figures.
+        mode: Data source mode (``"auto"``/``"api"``/``"local"``).
+        allow_fallback: If False, disables fallback in ``"auto"`` mode.
+    """
     os.makedirs(save_dir, exist_ok=True)
     set_publication_style()
 
     # Load and clean data (same as preprocessing, but keep unscaled for EDA)
     from data_preprocessing import load_raw_data, normalise_schema, clean_categoricals
 
-    df = load_raw_data(data_path)
+    df = load_raw_data(data_path, mode=mode, allow_fallback=allow_fallback)
     df = normalise_schema(df)
     df = clean_categoricals(df, verbose=False)
 

@@ -65,63 +65,58 @@ VALID_PAY_STATUS = {-2, -1, 0, 1, 2, 3, 4, 5, 6, 7, 8}
 # Loading
 # ──────────────────────────────────────────────────────────────────────────────
 
-def load_raw_data(filepath: Optional[str] = None) -> pd.DataFrame:
+def load_raw_data(
+    filepath: Optional[str] = None,
+    *,
+    mode: str = "auto",
+    allow_fallback: bool = True,
+) -> pd.DataFrame:
     """
     Load the raw UCI credit card default dataset.
 
-    Supports two modes:
-      1. ucimlrepo (default if filepath is None): fetches directly from UCI repository
-      2. Local XLS file: reads from disk if a filepath is provided
+    This is a thin wrapper over :mod:`data_sources`, which provides a layered
+    multi-source ingestion pipeline with graceful API → local-file failover.
 
-    The XLS file ships with a spurious header row (row index 0) that duplicates
-    the column names. The real header is in the Excel header row.
+    Parameters
+    ----------
+    filepath
+        Optional explicit path to a local ``.xls``/``.xlsx`` file. When set,
+        only the local file is consulted (no network attempt).
+    mode
+        Source preference. One of:
+
+        * ``"auto"`` (default) — try the UCI API first, fall back to the
+          local manual dataset if the API is unavailable.
+        * ``"api"`` — UCI API only; raises on failure.
+        * ``"local"`` — local file only; uses the default candidate list
+          plus the ``data/raw/`` directory.
+
+        Ignored when ``filepath`` is supplied.
+    allow_fallback
+        Only meaningful in ``"auto"`` mode. If ``False``, disables the local
+        fallback so API failures propagate as a hard error.
+
+    Returns
+    -------
+    pandas.DataFrame
+        Raw dataframe; downstream callers should still apply
+        :func:`normalise_schema` and :func:`clean_categoricals`.
     """
-    if filepath is None:
-        try:
-            from ucimlrepo import fetch_ucirepo
-        except ImportError:
-            raise ImportError(
-                "ucimlrepo not installed. Install with: pip install ucimlrepo\n"
-                "Or provide a filepath to the local XLS file."
-            )
-        try:
-            dataset = fetch_ucirepo(id=350)
-        except Exception as e:
-            raise ConnectionError(
-                f"Failed to fetch dataset from UCI repository: {e}\n"
-                "Check your internet connection, or provide a local file via --data-path."
-            )
+    # Imported here so the module remains importable even if ``data_sources``
+    # has not been added to ``sys.path`` yet (e.g., during introspection).
+    from data_sources import build_default_data_source
 
-        df = dataset.data.features.copy()
-        target = dataset.data.targets
-
-        # ucimlrepo returns columns as X1-X23, Y — map to named columns
-        uci_col_map = {
-            "X1": "LIMIT_BAL", "X2": "SEX", "X3": "EDUCATION",
-            "X4": "MARRIAGE", "X5": "AGE",
-            "X6": "PAY_0", "X7": "PAY_2", "X8": "PAY_3",
-            "X9": "PAY_4", "X10": "PAY_5", "X11": "PAY_6",
-            "X12": "BILL_AMT1", "X13": "BILL_AMT2", "X14": "BILL_AMT3",
-            "X15": "BILL_AMT4", "X16": "BILL_AMT5", "X17": "BILL_AMT6",
-            "X18": "PAY_AMT1", "X19": "PAY_AMT2", "X20": "PAY_AMT3",
-            "X21": "PAY_AMT4", "X22": "PAY_AMT5", "X23": "PAY_AMT6",
-        }
-        if "X1" in df.columns:
-            df.rename(columns=uci_col_map, inplace=True)
-
-        df["DEFAULT"] = target.values.ravel()
-        print(f"[INFO] Loaded via ucimlrepo: {df.shape[0]:,} rows x {df.shape[1]} columns")
-        return df
-
-    filepath = Path(filepath)
-    if not filepath.exists():
-        raise FileNotFoundError(f"Dataset not found at {filepath}")
-    if filepath.suffix.lower() not in (".xls", ".xlsx"):
-        raise ValueError(f"Expected .xls or .xlsx file, got: {filepath.suffix}")
-
-    df = pd.read_excel(filepath, header=1)
-    print(f"[INFO] Loaded from file: {df.shape[0]:,} rows x {df.shape[1]} columns")
-    return df
+    source = build_default_data_source(
+        data_path=filepath,
+        mode=mode,  # type: ignore[arg-type]
+        allow_fallback=allow_fallback,
+    )
+    result = source.load()
+    print(f"[INFO] {result.summary()}")
+    if result.failed_attempts:
+        for src_name, err in result.failed_attempts:
+            print(f"[INFO]   ↳ fell back from '{src_name}': {err}")
+    return result.dataframe
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -493,9 +488,21 @@ def run_preprocessing_pipeline(
     data_path: Optional[str] = None,
     output_dir: str = "data/processed",
     include_engineered: bool = True,
+    *,
+    mode: str = "auto",
+    allow_fallback: bool = True,
 ) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, Dict, Dict]:
     """
     End-to-end preprocessing pipeline.
+
+    Args:
+        data_path: Optional explicit local .xls/.xlsx path. Bypasses the
+            chained loader when set.
+        output_dir: Directory for serialized splits, metadata, and reports.
+        include_engineered: If True, also save engineered-feature splits.
+        mode: Data source mode (``"auto"``/``"api"``/``"local"``).
+            ``"auto"`` enables API → local fallback.
+        allow_fallback: If False, disables fallback in ``"auto"`` mode.
 
     Returns:
         train_df, val_df, test_df: Cleaned, split, scaled DataFrames
@@ -505,7 +512,7 @@ def run_preprocessing_pipeline(
     os.makedirs(output_dir, exist_ok=True)
 
     # 1. Load
-    df = load_raw_data(data_path)
+    df = load_raw_data(data_path, mode=mode, allow_fallback=allow_fallback)
 
     # 2. Normalise schema
     df = normalise_schema(df)

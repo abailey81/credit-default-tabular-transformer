@@ -138,12 +138,14 @@ credit-default-tabular-transformer/
 │
 ├── src/
 │   ├── __init__.py
+│   ├── data_sources.py         # Resilient multi-source loader (UCI API → local fallback)
 │   ├── data_preprocessing.py   # Data loading, cleaning, engineering, splitting, scaling
 │   ├── eda.py                  # 12 publication-quality visualisations
 │   └── random_forest.py        # RF benchmark: tuning, evaluation, importance, figures
 │
 ├── data/
-│   ├── raw/                    # Dataset source (not tracked --- fetched via ucimlrepo)
+│   ├── raw/                    # Dataset source (manual fallback .xls is tracked)
+│   │   └── default_of_credit_card_clients.xls   # Offline fallback dataset
 │   └── processed/              # Pipeline outputs
 │       ├── feature_metadata.json    # Category mappings for tokeniser
 │       └── validation_report.json   # Data quality audit
@@ -185,16 +187,39 @@ poetry install
 
 ### Data Loading
 
-The dataset is fetched automatically from the UCI repository via `ucimlrepo`. No manual download required.
+The project ships with a **resilient multi-source data loader**
+([`src/data_sources.py`](src/data_sources.py)) that gracefully falls over
+from the remote UCI API to a locally-shipped Excel file. Every consumer of
+the data --- the EDA module, the preprocessing pipeline, the Random Forest
+benchmark, *and* the notebooks --- routes through this loader, so the same
+fallback semantics apply everywhere.
+
+| Mode | Behaviour |
+|:---|:---|
+| `auto` *(default)* | Try the UCI API first; on failure, automatically fall back to the local manual dataset. The API is retried up to **3 times** with exponential backoff before failover. |
+| `api` | UCI API only. Failures propagate as a hard error. |
+| `local` | Local manual dataset only --- never contacts the network. |
+| `--no-fallback` | In `auto` mode, disables the local fallback so any UCI failure becomes a hard error. |
+| `--data-path FILE` | Pin to a specific `.xls`/`.xlsx` file. Overrides `--source` and never contacts the network. |
+
+The manual fallback dataset
+[`data/raw/default_of_credit_card_clients.xls`](data/raw/default_of_credit_card_clients.xls)
+is tracked in the repository so the offline path always works out of the box,
+even on a fresh clone with no network access.
 
 ```python
-from ucimlrepo import fetch_ucirepo
-dataset = fetch_ucirepo(id=350)
-X = dataset.data.features   # 30,000 x 23
-y = dataset.data.targets     # 30,000 x 1
+# Programmatic use --- same loader the CLI and notebooks rely on.
+from data_sources import build_default_data_source
+
+source = build_default_data_source(mode="auto", allow_fallback=True)
+result = source.load()
+print(result.summary())              # provenance: source, origin, duration
+df = result.dataframe                # 30,000 x ~25 raw columns
 ```
 
-A local `.xls` file can also be provided via `--data-path`.
+Every successful load returns a `DataSourceResult` carrying the source name,
+origin URI, elapsed time, and a list of any failed attempts that triggered
+the fallback --- so you always know exactly where your data came from.
 
 ### Run the Pipeline
 
@@ -211,8 +236,13 @@ poetry run python run_pipeline.py --preprocess-only
 # Random Forest benchmark (training + tuning + evaluation)
 poetry run python run_pipeline.py --rf-benchmark
 
-# With a local file
-poetry run python run_pipeline.py --data-path "data/raw/default of credit card clients.xls"
+# Force a specific data source
+poetry run python run_pipeline.py --source api      # UCI API only
+poetry run python run_pipeline.py --source local    # Local manual dataset only
+poetry run python run_pipeline.py --no-fallback     # auto mode without local fallback
+
+# Pin to a specific local file
+poetry run python run_pipeline.py --data-path "data/raw/default_of_credit_card_clients.xls"
 ```
 
 ### Notebooks
@@ -334,9 +364,17 @@ Defaulters consistently repay a smaller fraction of their bill across all 6 mont
 ## Preprocessing Pipeline
 
 ```
-UCI Repository ──> Schema Normalisation ──> Categorical Cleaning ──> Validation
-                                                                       │
-    ┌──────────────────────────────────────────────────────────────────┘
+                  ┌─────────────────────────────────┐
+                  │   ChainedDataSource (auto mode) │
+                  │ ┌─────────────┐ ┌─────────────┐ │
+                  │ │ UCI API     │→│ Local .xls  │ │
+                  │ │ (3 retries) │ │ (fallback)  │ │
+                  │ └─────────────┘ └─────────────┘ │
+                  └────────────────┬────────────────┘
+                                   v
+       Schema Normalisation ──> Categorical Cleaning ──> Validation
+                                                              │
+    ┌─────────────────────────────────────────────────────────┘
     v
 Feature Engineering (22 features) ──> Stratified Split (70/15/15)
     │                                        │
