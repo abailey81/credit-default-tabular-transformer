@@ -177,14 +177,18 @@ class UCIRepoSource(DataSource):
         dataset_id: int = UCI_DATASET_ID,
         max_retries: int = 3,
         backoff_seconds: float = 1.5,
+        request_timeout_seconds: float = 30.0,
     ) -> None:
         if max_retries < 1:
             raise ValueError("max_retries must be >= 1")
         if backoff_seconds < 0:
             raise ValueError("backoff_seconds must be >= 0")
+        if request_timeout_seconds <= 0:
+            raise ValueError("request_timeout_seconds must be > 0")
         self.dataset_id = dataset_id
         self.max_retries = max_retries
         self.backoff_seconds = backoff_seconds
+        self.request_timeout_seconds = request_timeout_seconds
 
     @property
     def name(self) -> str:
@@ -199,6 +203,13 @@ class UCIRepoSource(DataSource):
                 "or rely on the local fallback dataset."
             ) from exc
 
+        # Upstream `ucimlrepo.fetch_ucirepo` calls `urllib.request.urlopen`
+        # with no timeout (audited 2026-04-17; see SECURITY_AUDIT.md H-2).
+        # A slow-loris or unresponsive endpoint would hang this process
+        # indefinitely. We wrap the call in a ThreadPoolExecutor and enforce
+        # a hard deadline via Future.result(timeout=...).
+        from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeout
+
         last_error: Optional[BaseException] = None
         start = time.perf_counter()
         dataset = None
@@ -206,13 +217,23 @@ class UCIRepoSource(DataSource):
         for attempt in range(1, self.max_retries + 1):
             try:
                 logger.info(
-                    "Fetching dataset %d from UCI repository (attempt %d/%d)",
-                    self.dataset_id, attempt, self.max_retries,
+                    "Fetching dataset %d from UCI repository (attempt %d/%d, timeout %.0fs)",
+                    self.dataset_id, attempt, self.max_retries, self.request_timeout_seconds,
                 )
-                dataset = fetch_ucirepo(id=self.dataset_id)
+                with ThreadPoolExecutor(max_workers=1) as pool:
+                    future = pool.submit(fetch_ucirepo, id=self.dataset_id)
+                    try:
+                        dataset = future.result(timeout=self.request_timeout_seconds)
+                    except FutureTimeout as exc:
+                        # Deadline exceeded; abandon the worker thread.
+                        future.cancel()
+                        raise TimeoutError(
+                            f"UCI fetch exceeded {self.request_timeout_seconds:.0f}s deadline"
+                        ) from exc
                 last_error = None
                 break
-            except Exception as exc:  # noqa: BLE001 — third-party may raise anything
+            except (ConnectionError, TimeoutError, OSError, ValueError) as exc:
+                # Recoverable: retry with exponential backoff.
                 last_error = exc
                 logger.warning(
                     "UCI fetch attempt %d/%d failed: %s",
@@ -353,15 +374,38 @@ class ChainedDataSource(DataSource):
     def name(self) -> str:
         return "Chain[" + " → ".join(s.name for s in self.sources) + "]"
 
+    # Recoverable failures that justify falling over to the next source.
+    # Broader bugs (TypeError, MemoryError, BaseException like KeyboardInterrupt)
+    # must NOT be swallowed — they indicate developer error or user intent.
+    _RECOVERABLE_ERRORS: tuple = (
+        ConnectionError,
+        TimeoutError,
+        FileNotFoundError,
+        OSError,  # includes socket.gaierror, ssl.SSLError, etc.
+        ValueError,  # malformed source output (schema mismatch, etc.)
+        ImportError,  # ucimlrepo not installed in local-only environments
+    )
+
     def load(self) -> DataSourceResult:
         failures: list[Tuple[str, str]] = []
         for source in self.sources:
             try:
                 result = source.load()
-            except Exception as exc:  # noqa: BLE001 — fall over on any failure
-                logger.warning("Source '%s' failed: %s", source.name, exc)
+            except self._RECOVERABLE_ERRORS as exc:
+                logger.warning("Source '%s' failed (recoverable): %s", source.name, exc)
                 failures.append((source.name, f"{type(exc).__name__}: {exc}"))
                 continue
+            except Exception as exc:
+                # Unrecoverable (programming error, hardware failure, etc.):
+                # record the failure, re-raise. We don't want to silently
+                # cascade to the local fallback if e.g. a tokenisation bug
+                # produced the exception — that would hide bugs.
+                logger.error(
+                    "Source '%s' raised unrecoverable %s — aborting chain",
+                    source.name, type(exc).__name__,
+                )
+                failures.append((source.name, f"{type(exc).__name__}: {exc}"))
+                raise DataIngestionError(failures) from exc
 
             if failures:
                 logger.info(
