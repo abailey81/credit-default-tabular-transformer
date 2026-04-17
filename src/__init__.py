@@ -66,8 +66,22 @@ Training, evaluation, baseline
                     ``config.json``, ``train_log.csv``, ``test_metrics.json``,
                     ``test_predictions.npz``, ``test_attn_weights.npz``,
                     and a hardened checkpoint under ``--output-dir``.
+* :mod:`mtlm`     — Plan §8.5 / Novelty N4: Masked Tabular Language
+                    Modelling. :class:`mtlm.MTLMHead` with per-feature
+                    prediction heads (3 categorical + 6 PAY + 14 numerical),
+                    :func:`mtlm.mtlm_loss` with entropy-normalised CE +
+                    variance-normalised MSE, and
+                    :class:`mtlm.MTLMModel` whose state-dict prefixes are
+                    drop-in for
+                    :meth:`model.TabularTransformer.load_pretrained_encoder`.
+* :mod:`train_mtlm` — Phase 6A pretraining loop. Produces a tiny
+                    encoder-only state-dict artefact
+                    (``encoder_pretrained.pt``) that the supervised
+                    ``train.py`` picks up via ``--pretrained-encoder`` for
+                    §8.5.5 two-stage fine-tuning.
 * :mod:`random_forest` — hyperparameter-tuned Random Forest benchmark
-                         (Plan §9).
+                         (Plan §9 — 200-iter randomised search across a
+                         7-dimensional grid).
 
 Every consumer of the raw dataset routes through
 :func:`data_sources.build_default_data_source` so that the API → local

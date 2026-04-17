@@ -973,14 +973,30 @@ src/utils.py            — Seed setting, device handling, checkpointing
 
 ## 8.5 Phase 6A: Self-Supervised Masked Tabular Language Modelling (NOVEL — N4)
 
-**Status: [PARTIAL] IN PROGRESS** — collator (`tokenizer.MTLMCollator`:
-BERT 80/10/10 split, per-row min/max mask bounds, seedable) and the
-model-side `[MASK]` embedding (`embedding.FeatureEmbedding(use_mask_token=True)`;
-mask replacement preserves both feature positional and temporal positional
-signals so masked temporal tokens retain their month index) are landed. Still
-TODO: per-feature prediction heads (`src/mtlm.py`: 3 cat CE heads, 6 PAY CE
-heads, 14 numerical MSE heads), pretraining loop (`src/train_mtlm.py`),
-fine-tuning protocol with two-stage LR.
+**Status: [DONE] COMPLETE** — all three MTLM components landed:
+
+* **`src/mtlm.py`** (~420 LOC) — `MTLMHead` with per-feature prediction
+  heads (3 categorical CE heads + 6 PAY CE heads + 14 numerical MSE heads,
+  drift-safe token slicing from `TOKEN_ORDER`), entropy-normalised CE
+  + variance-normalised MSE composite loss (`mtlm_loss`), and the
+  `MTLMModel` wrapper whose state-dict prefixes (`embedding.*`,
+  `encoder.*`) are drop-in for downstream supervised fine-tuning.
+* **`src/train_mtlm.py`** (~440 LOC) — the pretraining loop. Shares the
+  cosine-warmup LR schedule + `EarlyStopping` + checkpoint code paths
+  with `src/train.py`. Produces a tiny ~130 KB `encoder_pretrained.pt`
+  artefact consumed by `train.py --pretrained-encoder PATH`.
+* **`model.TabularTransformer.load_pretrained_encoder`** generalised to
+  accept either a full checkpoint bundle (via `utils.load_checkpoint`,
+  weights-only-safe) or a raw state-dict file — the MTLM handoff
+  artefact.
+
+Exercised end-to-end: `results/mtlm/run_42/` contains the full
+pretraining artefact set; validation reconstruction loss dropped from
+3.81 → 1.46 in 12 epochs (early-stopped at epoch 22 of the 50-epoch
+cap). Fine-tuning from the pretrained encoder is then handled by
+`src/train.py --pretrained-encoder …` with the §8.5.5 two-stage LR
+(`encoder_lr_ratio = 0.2`) — see `results/transformer/seed_42_mtlm_finetune/`
+for the fine-tuned supervised model.
 
 This is the single most "language-model-like" component of the project. The coursework brief explicitly frames the requirement as a "small transformer-based **language model**" — we take that framing seriously. Large language models (BERT, GPT) owe their generalisation to a self-supervised pretraining stage on unlabeled data before fine-tuning on the downstream task. We adapt this paradigm to structured credit data via **Masked Tabular Language Modelling** (MTLM).
 
