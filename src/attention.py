@@ -47,6 +47,7 @@ class ScaledDotProductAttention(nn.Module):
         Q: torch.Tensor,
         K: torch.Tensor,
         V: torch.Tensor,
+        attn_bias: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         d_k = Q.size(-1)
 
@@ -55,6 +56,12 @@ class ScaledDotProductAttention(nn.Module):
 
         # 2. Scale by sqrt(d_k) to prevent softmax saturation
         scores = scores / math.sqrt(d_k)
+
+        # 2b. Optional additive bias on pre-softmax scores (e.g. temporal-decay
+        #     prior from TransformerEncoder). Broadcasts over (B, n_heads)
+        #     when given as (seq_len, seq_len) or (n_heads, seq_len, seq_len).
+        if attn_bias is not None:
+            scores = scores + attn_bias
 
         # 3. Softmax → attention weights (each row sums to 1)
         attn_weights = F.softmax(scores, dim=-1)
@@ -124,7 +131,9 @@ class MultiHeadAttention(nn.Module):
             nn.init.zeros_(linear.bias)
 
     def forward(
-        self, x: torch.Tensor
+        self,
+        x: torch.Tensor,
+        attn_bias: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         B, seq_len, _ = x.shape
 
@@ -138,8 +147,9 @@ class MultiHeadAttention(nn.Module):
         K = K.view(B, seq_len, self.n_heads, self.d_k).transpose(1, 2)
         V = V.view(B, seq_len, self.n_heads, self.d_k).transpose(1, 2)
 
-        # 3. Scaled dot-product attention per head
-        attn_output, attn_weights = self.attention(Q, K, V)
+        # 3. Scaled dot-product attention per head, optionally with an additive
+        #    bias on pre-softmax scores (threaded through from the encoder).
+        attn_output, attn_weights = self.attention(Q, K, V, attn_bias=attn_bias)
 
         # 4. Concatenate heads: (B, n_heads, seq_len, d_k) → (B, seq_len, d_model)
         attn_output = (
@@ -161,8 +171,13 @@ class MultiHeadAttention(nn.Module):
 if __name__ == "__main__":
     B, seq_len, d_model, n_heads = 4, 24, 64, 4
 
+    # Deterministic — needed for the "bias=None vs bias=zeros" regression check
+    torch.manual_seed(0)
+
     x = torch.randn(B, seq_len, d_model)
-    mha = MultiHeadAttention(d_model=d_model, n_heads=n_heads, dropout=0.1)
+    mha = MultiHeadAttention(d_model=d_model, n_heads=n_heads, dropout=0.0)
+    mha.eval()  # disable attention dropout so outputs are comparable across calls
+
     output, weights = mha(x)
 
     print(f"Input shape:            {x.shape}")
@@ -177,7 +192,23 @@ if __name__ == "__main__":
     row_sums = weights.sum(dim=-1)
     assert torch.allclose(row_sums, torch.ones_like(row_sums), atol=1e-5), "Attention weights don't sum to 1"
 
-    # Gradient check
+    # ── attn_bias regression: zero bias must match the no-bias call exactly ──
+    zero_bias = torch.zeros(seq_len, seq_len)
+    output_zero, weights_zero = mha(x, attn_bias=zero_bias)
+    assert torch.allclose(output, output_zero, atol=1e-6), "Zero attn_bias changed output"
+    assert torch.allclose(weights, weights_zero, atol=1e-6), "Zero attn_bias changed weights"
+
+    # ── attn_bias effect: a large negative bias at position (0, 1) should drive
+    #    the attention weight from token 0 to token 1 near zero ──
+    biased = torch.zeros(seq_len, seq_len)
+    biased[0, 1] = -1e4
+    _, weights_biased = mha(x, attn_bias=biased)
+    suppressed = weights_biased[:, :, 0, 1]
+    assert torch.all(suppressed < 1e-3), f"Bias did not suppress attention weight (got max {suppressed.max().item():.4f})"
+
+    # Gradient check (re-run with dropout on to exercise the full training path)
+    mha.train()
+    output, _ = mha(x)
     loss = output.sum()
     loss.backward()
     for name, param in mha.named_parameters():
