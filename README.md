@@ -4,7 +4,7 @@
 
 ### Self-Attention on Structured Credit Data vs. Random Forest Baseline
 
-[![Python](https://img.shields.io/badge/Python-3.9%2B-3776AB?style=for-the-badge&logo=python&logoColor=white)](https://python.org)
+[![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?style=for-the-badge&logo=python&logoColor=white)](https://python.org)
 [![Poetry](https://img.shields.io/badge/Poetry-2.0%2B-60A5FA?style=for-the-badge&logo=poetry&logoColor=white)](https://python-poetry.org)
 [![scikit-learn](https://img.shields.io/badge/scikit--learn-1.2%2B-F7931E?style=for-the-badge&logo=scikit-learn&logoColor=white)](https://scikit-learn.org)
 [![License: MIT](https://img.shields.io/badge/License-MIT-A855F7?style=for-the-badge)](LICENSE)
@@ -15,7 +15,7 @@
 
 <br>
 
-[Overview](#overview) · [Roadmap](#project-roadmap) · [Key Findings](#key-eda-findings) · [Structure](#repository-structure) · [Getting Started](#getting-started) · [EDA Gallery](#exploratory-data-analysis-gallery) · [Data Ingestion](#resilient-data-ingestion) · [Pipeline](#preprocessing-pipeline) · [References](#references)
+[Overview](#overview) · [Roadmap](#project-roadmap) · [Headline Results](#headline-results) · [Transformer Model](#transformer-model) · [Key Findings](#key-eda-findings) · [Structure](#repository-structure) · [Getting Started](#getting-started) · [EDA Gallery](#exploratory-data-analysis-gallery) · [Data Ingestion](#resilient-data-ingestion) · [Pipeline](#preprocessing-pipeline) · [Random Forest](#random-forest-benchmark) · [References](#references)
 
 ---
 
@@ -32,7 +32,7 @@ This project develops two models for predicting credit card default on the [UCI 
 
 The dataset contains **6 monthly snapshots** of payment behaviour (April--September 2005) per client. The EDA in this repository reveals clear temporal divergence between defaulters and non-defaulters, motivating a sequence-aware architecture.
 
-> This repository currently contains **Steps 0--3, Step 4 (partial: encoder landed, full model next), and Step 5**. The training loop, evaluation framework, and experiments are in subsequent PRs.
+> This repository currently contains **Phases 1--7 end-to-end**: preprocessing, EDA, tokenisation, embedding, attention, transformer encoder, top-level `TabularTransformer`, the supervised training loop, MTLM (masked-tabular-language-modelling) pretraining, the 4-model ensemble, and the 200-iter tuned Random Forest benchmark. Phase 8+ (formal evaluation, calibration, fairness, UQ, attention interpretability, statistical significance) is deliberately scoped to a subsequent PR.
 
 ### Dataset
 
@@ -56,9 +56,38 @@ The dataset contains **6 monthly snapshots** of payment behaviour (April--Septem
 | **1** | Exploratory Data Analysis | `DONE` | 12 figures with statistical tests. Temporal divergence, PAY semantics, feature importance, multicollinearity, outlier and normality diagnostics. |
 | **2** | Data Preprocessing | `DONE` | Schema normalisation, categorical cleaning, 22 engineered features, stratified 70/15/15 split, leak-free scaling, tokeniser metadata export. |
 | **3** | Tabular Tokenisation | `DONE` | Hybrid PAY state+severity tokenisation (Novelty N1) in [`src/tokenizer.py`](src/tokenizer.py); feature embedding with [CLS], optional temporal positional encoding, and MTLM `[MASK]` support in [`src/embedding.py`](src/embedding.py). |
-| **4** | Transformer (From Scratch) | `PARTIAL` | Attention ([`src/attention.py`](src/attention.py), PR #7 + `attn_bias` hook PR #8) and PreNorm encoder ([`src/transformer.py`](src/transformer.py), PR #8 — `FeedForward`, `TransformerBlock`, `TemporalDecayBias` Novelty N3, `TransformerEncoder`) landed. Top-level `TabularTransformer` wrapper in [`src/model.py`](src/model.py) and supervised training loop in [`src/train.py`](src/train.py) are next. |
-| **5** | Random Forest Benchmark | `DONE` | Hyperparameter-tuned Random Forest on engineered features. 60-iter RandomizedSearchCV, dual importance, threshold optimisation. |
-| **6** | Experiments & Comparison | `TODO` | Metrics (AUC-ROC, F1, precision-recall), attention visualisation, ablation studies, calibration, statistical significance, limitations. |
+| **4** | Transformer (From Scratch) | `DONE` | Attention ([`src/attention.py`](src/attention.py) + `attn_bias` hook), PreNorm encoder ([`src/transformer.py`](src/transformer.py) — `FeedForward`, `TransformerBlock`, `TemporalDecayBias` Novelty N3, `FeatureGroupBias` Novelty N2, `TransformerEncoder`), and the top-level [`TabularTransformer`](src/model.py) wiring tokeniser → embedding → encoder → pool → 2-layer MLP head → logit. Parameter budget: ~28 K. |
+| **5** | Losses & Supervised Training | `DONE` | Focal / weighted-BCE / label-smoothing BCE losses ([`src/losses.py`](src/losses.py)); AdamW + cosine-warmup schedule, gradient clipping, early stopping, optional stratified batching, optional two-stage LR for MTLM fine-tuning, optional multi-task PAY_0 auxiliary head (Novelty N5), ensembling helpers in [`src/train.py`](src/train.py) + [`src/model.py`](src/model.py). Every run writes `{train,val,test}_metrics.json` and `{train,val,test}_predictions.npz`. |
+| **6** | MTLM Pretraining (Novelty N4) | `DONE` | Masked Tabular Language Modelling pretraining — BERT-style 15 % masking with per-feature heads (3 categorical + 6 PAY + 14 numerical), entropy-normalised CE + variance-normalised MSE, drop-in encoder artefact for supervised fine-tuning. [`src/mtlm.py`](src/mtlm.py) + [`src/train_mtlm.py`](src/train_mtlm.py). |
+| **7** | Random Forest Benchmark | `DONE` | 200-iter × 7-parameter `RandomizedSearchCV` on engineered features, 5-fold CV, dual importance (Gini + permutation), threshold optimisation, five publication-quality figures. [`src/random_forest.py`](src/random_forest.py). |
+| **8+** | Formal Evaluation | `DEFERRED` | `src/evaluate.py`, `src/calibration.py`, `src/stat_tests.py`, `src/interpretability.py` — paired-bootstrap CIs, DeLong / McNemar, ECE + Brier + reliability diagrams, attention rollout, A1–A22 ablation runner. Scheduled for the next PR. |
+
+<br>
+
+## Headline Results
+
+All numbers on the 4,500-row held-out test set (22.1 % positive class). The
+full threshold sweep and ensembling analysis lives in
+[`notebooks/04_train_transformer.ipynb`](notebooks/04_train_transformer.ipynb)
+and [`results/head_to_head_summary.txt`](results/head_to_head_summary.txt).
+
+| Model | AUC-ROC | AUC-PR | F1 @ τ=0.5 | F1 @ F1-opt τ | Accuracy @ τ=0.5 |
+|:---|---:|---:|---:|---:|---:|
+| Transformer seed_42 (from scratch) | 0.7772 | 0.5570 | 0.5221 | 0.5449 @ 0.54 | 0.7429 |
+| Transformer seed_1 (from scratch) | 0.7816 | 0.5642 | 0.5279 | 0.5437 @ 0.53 | 0.7440 |
+| Transformer seed_2 (from scratch) | 0.7801 | 0.5565 | 0.5292 | **0.5516 @ 0.53** | 0.7549 |
+| Transformer seed_42 + MTLM fine-tune | 0.7801 | 0.5605 | 0.5322 | 0.5449 @ 0.53 | **0.7593** |
+| **Transformer 3-seed ensemble** | 0.7815 | 0.5646 | 0.5263 | 0.5478 @ 0.53 | 0.7500 |
+| **Transformer 4-model ensemble** | **0.7819** | **0.5656** | 0.5282 | **0.5491 @ 0.54** | 0.7527 |
+| RF baseline (100 trees, defaults) | 0.7654 | 0.5389 | 0.4647 | — | 0.8147 |
+| **RF tuned (200-iter RandomizedSearchCV)** | **0.7845** | 0.5673 | 0.4642 | — | **0.8220** |
+
+**Key observations**:
+
+* **Best AUC-ROC**: RF tuned (0.7845) edges the 4-model transformer ensemble (0.7819) by 0.26 pp — a gap that is too narrow to resolve on a 4,500-row test set without paired-bootstrap CIs (Phase 8+).
+* **Best F1**: transformer ensemble **0.5491** at τ=0.54 vs RF 0.4642 — an **8.5 pp absolute gap in the transformer's favour**. RF wins accuracy by under-predicting the minority class (RF recall ≈ 0.37 vs transformer recall ≈ 0.55).
+* **MTLM pretraining effect** (Novelty N4): `seed_42_mtlm_finetune` has the **lowest ECE (0.2515) and lowest Brier (0.2061)** of any single model — calibration-direction-consistent with Rubachev et al. (2022); accuracy gains are marginal at this 21 K-row regime as expected.
+* **Generalisation gap**: train ≈ val ≈ test (0–2 pp accuracy gap, ~1–2 pp AUC-ROC gap) — early stopping + dropout + weight decay keep the model firmly in the under-fitting end of the spectrum on the 21 K-row training split.
 
 <br>
 
@@ -123,40 +152,114 @@ PAY values have **two distinct zones**: categorical (-2, -1, 0 = no bill / paid 
 
 <br>
 
+## Transformer Model
+
+```
+tokeniser ──> embedding ──> encoder (N layers) ──> pool ──> 2-layer MLP head ──> logit
+   │             │               │                    │
+   │             │               └─ TemporalDecayBias (N3)     └─ [CLS] / mean / max
+   │             │               └─ FeatureGroupBias  (N2)
+   │             └─ per-feature projections + [CLS] + temporal pos (A7) + [MASK] (N4 prereq)
+   └─ hybrid PAY state + severity (N1)
+```
+
+| File | Role |
+|:---|:---|
+| [`src/tokenizer.py`](src/tokenizer.py) | Hybrid PAY state + severity tokenisation (Novelty N1); vectorised `tokenize_dataframe`, `MTLMCollator` for BERT-style masking, `PAYValueError`, schema validation. |
+| [`src/embedding.py`](src/embedding.py) | `FeatureEmbedding` with per-feature projections, [CLS] token, optional temporal positional encoding (Ablation A7), optional [MASK] token for MTLM (Novelty N4 prereq); drift-safe `build_temporal_layout` / `build_group_assignment` helpers. |
+| [`src/attention.py`](src/attention.py) | From-scratch `ScaledDotProductAttention` and `MultiHeadAttention` with an `attn_bias` hook for architectural novelties. |
+| [`src/transformer.py`](src/transformer.py) | `FeedForward`, PreNorm `TransformerBlock` with independently-ablatable attention / FFN / residual dropout channels (Ablation A12), `TemporalDecayBias` (Novelty N3), `FeatureGroupBias` (Novelty N2), `TransformerEncoder`. |
+| [`src/model.py`](src/model.py) | `TabularTransformer` end-to-end wrapper (~28 K parameters at plan defaults), `predict_logits` / `predict_proba` / `ensemble_probabilities` helpers, `load_pretrained_encoder` supporting both full checkpoint bundles and raw MTLM state dicts. |
+| [`src/losses.py`](src/losses.py) | `WeightedBCELoss`, `FocalLoss` (γ-configurable, α ∈ {scalar, tuple, "balanced", None}), `LabelSmoothingBCELoss`. |
+| [`src/train.py`](src/train.py) | Supervised loop: AdamW + cosine-warmup + gradient clipping + early stopping on val AUC-ROC + optional two-stage LR (§8.5.5 MTLM fine-tune) + optional multi-task PAY_0 aux head (Novelty N5). Writes `config.json`, `train_log.csv`, `{train,val,test}_metrics.json`, `{train,val,test}_predictions.npz`, `test_attn_weights.npz`, `best.pt`. |
+| [`src/mtlm.py`](src/mtlm.py) | `MTLMHead` (3 cat + 6 PAY + 14 numerical heads), `mtlm_loss` (entropy-normalised CE + variance-normalised MSE), `MTLMModel` wrapper with state-dict prefixes drop-in for `TabularTransformer.load_pretrained_encoder`. |
+| [`src/train_mtlm.py`](src/train_mtlm.py) | MTLM pretraining loop. Emits a ~130 KB `encoder_pretrained.pt` consumed by `python src/train.py --pretrained-encoder PATH` for the §8.5.5 two-stage fine-tune. |
+| [`src/dataset.py`](src/dataset.py) | `StratifiedBatchSampler` (every batch has exactly `round(batch_size * positive_rate)` positives), `make_loader` factory (`train` / `val` / `test` / `mtlm` modes). |
+| [`src/utils.py`](src/utils.py) | Determinism protocol, device selection, hardened (weights-only by default) checkpoint save / load, `EarlyStopping`, parameter accounting, UTF-8-safe logging. |
+
+### Novelty Register
+
+| # | Name | Where | What it adds |
+|:---:|:---|:---|:---|
+| **N1** | Hybrid PAY state + severity | [`src/tokenizer.py`](src/tokenizer.py) | Encodes `{-2: no_bill, -1: paid, 0: revolving}` as a 3-way state alongside a normalised severity in `[0, 1]` for delinquency months — respects both the categorical structure of `{-2, -1, 0}` and the ordinal structure of `{1..8}`. |
+| **N2** | Feature-group attention bias | `FeatureGroupBias` in [`src/transformer.py`](src/transformer.py) | Learnable 5×5 bias matrix indexed by semantic group (CLS / demographic / PAY / BILL_AMT / PAY_AMT). Zero-initialised — activates only if it helps. `scalar` / `per_head` / `off` modes (Ablation A21). |
+| **N3** | Temporal-decay bias | `TemporalDecayBias` in [`src/transformer.py`](src/transformer.py) | ALiBi-inspired learnable prior that penalises within-group attention between temporally distant months (PAY_0 ↔ PAY_6). Justified by EDA Fig 9 (BILL_AMT autocorrelation decays 0.95 → 0.7 across 6 months). Ablation A22. |
+| **N4** | Masked Tabular Language Modelling | [`src/mtlm.py`](src/mtlm.py) + [`src/train_mtlm.py`](src/train_mtlm.py) | BERT-style self-supervised pretraining with per-feature heads; produces the lowest-ECE / lowest-Brier single model in this project. |
+| **N5** | Multi-task PAY_0 aux head | `aux_pay0=True` in [`src/model.py`](src/model.py) + `--aux-pay0-lambda` in [`src/train.py`](src/train.py) | Joint training of the primary default classifier with an auxiliary 11-class CE objective on PAY_0 — extra gradient signal on the strongest single feature. Infrastructure ready; λ sweep scheduled in a later PR (Ablation A16). |
+
+<br>
+
 ## Repository Structure
 
 ```
 credit-default-tabular-transformer/
 │
 ├── pyproject.toml              # Poetry configuration and dependencies
-├── poetry.lock                 # Locked dependency versions
+├── poetry.lock                 # Locked dependency versions (Python 3.10–3.12, torch 2.2.x)
 ├── run_pipeline.py             # CLI entry point (EDA, preprocessing, RF benchmark)
+├── PROJECT_PLAN.md             # 14-phase execution blueprint with novelty register + §21 PDF-requirements audit
+├── SECURITY_AUDIT.md           # 15-dimension paranoid audit (20 findings, C-1 weights-only closed)
+├── CHANGELOG.md                # Per-PR / per-commit log of every module + artefact landing
 │
 ├── notebooks/
 │   ├── 01_exploratory_data_analysis.ipynb   # Full EDA with statistical tests
 │   ├── 02_data_preprocessing.ipynb          # Preprocessing pipeline walkthrough
-│   └── 03_random_forest_benchmark.ipynb     # RF training, tuning, evaluation, importance
+│   ├── 03_random_forest_benchmark.ipynb     # RF training, tuning, evaluation, importance
+│   └── 04_train_transformer.ipynb           # Transformer training pipeline, multi-seed sweep,
+│                                              A5×A22 ablation grid, reliability diagram,
+│                                              head-to-head, train/val/test parity,
+│                                              ensemble + threshold-optimisation tables
 │
 ├── src/
-│   ├── __init__.py
+│   ├── __init__.py             # Package overview (every module linked to its Plan section)
 │   ├── data_sources.py         # Resilient multi-source loader (UCI API → local fallback)
-│   ├── data_preprocessing.py   # Data loading, cleaning, engineering, splitting, scaling
+│   ├── data_preprocessing.py   # Loading, cleaning, engineering, splitting, scaling
 │   ├── eda.py                  # 12 publication-quality visualisations
-│   └── random_forest.py        # RF benchmark: tuning, evaluation, importance, figures
+│   ├── tokenizer.py            # Hybrid PAY tokenisation (N1) + MTLMCollator
+│   ├── embedding.py            # Per-feature embedding + [CLS] + temporal pos + [MASK]
+│   ├── attention.py            # Scaled dot-product + multi-head attention (from scratch)
+│   ├── transformer.py          # FeedForward + TransformerBlock + TransformerEncoder
+│   │                             + TemporalDecayBias (N3) + FeatureGroupBias (N2)
+│   ├── model.py                # TabularTransformer end-to-end (~28 K params)
+│   ├── losses.py               # Focal / WBCE / label-smoothing BCE
+│   ├── dataset.py              # Stratified batch sampler + loader factory
+│   ├── utils.py                # Determinism + hardened checkpoints + EarlyStopping
+│   ├── train.py                # Supervised training loop (AdamW + cosine-warmup + ES)
+│   ├── mtlm.py                 # MTLMHead + mtlm_loss + MTLMModel (Novelty N4)
+│   ├── train_mtlm.py           # Self-supervised pretraining loop (emits encoder artefact)
+│   └── random_forest.py        # RF benchmark: 200-iter RandomizedSearchCV on 7-dim grid
+│
+├── tests/                      # 222 pytest cases across every module
+│   ├── test_attention.py       test_dataset.py          test_embedding.py
+│   ├── test_losses.py          test_model.py            test_mtlm.py
+│   ├── test_tokenizer.py       test_train.py            test_transformer.py
+│   └── test_utils.py
 │
 ├── data/
 │   ├── raw/                    # Dataset source (manual fallback .xls is tracked)
 │   │   └── default_of_credit_card_clients.xls   # Offline fallback dataset
-│   └── processed/              # Pipeline outputs
+│   └── processed/              # Pipeline outputs (gitignored except metadata + report)
 │       ├── feature_metadata.json    # Category mappings for tokeniser
 │       └── validation_report.json   # Data quality audit
 │
-├── figures/                    # EDA + RF figures (300 DPI)
+├── figures/                    # EDA (12) + RF (5) figures at 300 DPI
 │
-├── results/                    # Summary statistics + RF results (CSV, JSON, LaTeX)
+├── results/
+│   ├── rf_*.{csv,json}                         # RF tuned + 5-fold CV + feature importance
+│   ├── head_to_head_summary.txt                # Full ensemble + threshold sweep table
+│   ├── transformer/train_val_test_summary.csv  # 4-run parity spreadsheet
+│   ├── transformer/seed_{42,1,2}/              # Three from-scratch replicates with
+│   │   │                                         train/val/test metrics + predictions
+│   │   ├── config.json  train_log.csv  best.pt.meta.json
+│   │   ├── {train,val,test}_metrics.json      # Per-split metrics @ τ=0.5
+│   │   └── {train,val,test}_predictions.npz   # (y_true, y_prob, y_pred)
+│   ├── transformer/seed_42_mtlm_finetune/      # Supervised fine-tune from MTLM encoder
+│   └── mtlm/run_42/                            # MTLM pretraining artefacts (22 epochs,
+│                                                 val loss 3.81 → 1.46, encoder = 130 KB)
 │
+├── finance_and_ai_cw___group_project-2.pdf     # Coursework specification (tracked)
 └── docs/
-    └── coursework_spec.md      # Assignment specification
+    └── coursework_spec.md      # Markdown transcription of the coursework PDF
 ```
 
 <br>
@@ -167,8 +270,9 @@ credit-default-tabular-transformer/
 
 | Requirement | Version | Check |
 |:---|:---|:---|
-| Python | 3.9+ | `python3 --version` |
+| Python | 3.10–3.12 | `python3 --version` |
 | Poetry | 2.0+ | `poetry --version` |
+| PyTorch | 2.2.x | (installed by Poetry, CPU / CUDA / Apple MPS all supported) |
 
 If Poetry is not installed:
 
@@ -210,7 +314,7 @@ poetry run python run_pipeline.py --eda-only
 # Preprocessing only
 poetry run python run_pipeline.py --preprocess-only
 
-# Random Forest benchmark (training + tuning + evaluation)
+# Random Forest benchmark (200-iter RandomizedSearchCV on 7-dim grid)
 poetry run python run_pipeline.py --rf-benchmark
 
 # Force a specific data source
@@ -220,6 +324,50 @@ poetry run python run_pipeline.py --no-fallback     # auto mode without local fa
 
 # Pin to a specific local file
 poetry run python run_pipeline.py --data-path "data/raw/default_of_credit_card_clients.xls"
+```
+
+### Train the Transformer
+
+```bash
+# Supervised from scratch (plan defaults: d_model=32, n_heads=4, n_layers=2,
+# focal γ=2, N2 + N3 on, temporal pos on, stratified batches on)
+poetry run python src/train.py \
+    --seed 42 --output-dir results/transformer/seed_42 \
+    --epochs 200 --patience 20 --lr 3e-4 \
+    --use-temporal-pos --temporal-decay-mode scalar --feature-group-bias-mode scalar \
+    --stratified-batches
+
+# MTLM pretraining (Novelty N4) — ~130 KB encoder artefact
+poetry run python src/train_mtlm.py \
+    --output-dir results/mtlm/run_42 --seed 42
+
+# Supervised fine-tune from an MTLM-pretrained encoder (§8.5.5 two-stage LR)
+poetry run python src/train.py \
+    --seed 42 --output-dir results/transformer/seed_42_mtlm_finetune \
+    --pretrained-encoder results/mtlm/run_42/encoder_pretrained.pt \
+    --encoder-lr-ratio 0.2 --trust-checkpoint
+
+# End-to-end smoke-test mode (2 epochs on 500 rows — for CI and debugging)
+poetry run python src/train.py --smoke-test --output-dir /tmp/smoke
+poetry run python src/train_mtlm.py --smoke-test --output-dir /tmp/mtlm_smoke
+```
+
+Every run writes `config.json`, `train_log.csv`, `{train,val,test}_metrics.json`,
+`{train,val,test}_predictions.npz`, `test_attn_weights.npz`, and a hardened
+checkpoint bundle (`best.pt` + `.weights` + `.meta.json`) under
+`--output-dir`.
+
+### Tests
+
+```bash
+# Full pytest suite (222 cases, all pass, ~4 s on CPU)
+poetry run pytest tests/ -q
+
+# Every src/*.py __main__ smoke test (8 modules with smoke blocks; mtlm.py is
+# covered by tests/test_mtlm.py instead)
+for m in attention tokenizer embedding transformer model losses dataset utils; do
+    poetry run python src/$m.py
+done
 ```
 
 ### Notebooks
@@ -233,6 +381,7 @@ poetry run jupyter notebook notebooks/
 | `01_exploratory_data_analysis.ipynb` | 20+ visualisations, statistical tests (Wilson CI, KS, Mann-Whitney U, Cohen's d, Cramer's V, D'Agostino, VIF, mutual information) |
 | `02_data_preprocessing.ipynb` | Cleaning, validation, feature engineering, stratified splitting, scaling, metadata export |
 | `03_random_forest_benchmark.ipynb` | Baseline vs tuned RF, hyperparameter analysis, feature importance (Gini + permutation), threshold optimisation, cross-validation |
+| `04_train_transformer.ipynb` | Transformer training pipeline (Colab / VS Code / local auto-detecting), multi-seed sweep, A5 × A22 ablation grid, training-curve dashboard, reliability diagram, head-to-head vs RF, train/val/test parity, F1-optimal threshold picking, 3-seed + 4-model arithmetic / geometric ensembles. |
 
 <br>
 
@@ -484,7 +633,7 @@ Shared Pipeline (data_preprocessing.py)
         Baseline RF (100 trees, defaults)
                 │
                 v
-        RandomizedSearchCV (60 iter × 5-fold CV)
+        RandomizedSearchCV (200 iter × 5-fold CV — 1,000 fits)
                 │
                 v
         Tuned RF → Evaluate (val + test)
@@ -502,16 +651,22 @@ Figures:  rf_roc_pr_curves.png, rf_confusion_matrix.png,
           rf_tuning_analysis.png
 ```
 
-### Hyperparameter Search Space
+### Hyperparameter Search Space (Plan §9.3 — 200 iter × 7 parameters × 5-fold CV)
 
 | Parameter | Values | Rationale |
 |:---|:---|:---|
-| `n_estimators` | 100, 200, 300, 500 | Ensemble size vs compute trade-off |
-| `max_depth` | 5, 10, 15, 20, None | Bias--variance control |
-| `min_samples_split` | 2, 5, 10 | Split regularisation |
-| `min_samples_leaf` | 1, 2, 4 | Leaf-level smoothing |
-| `max_features` | sqrt, log2 | Tree decorrelation |
+| `n_estimators` | 100, 200, 300, 500, 1000 | Ensemble size vs compute trade-off |
+| `max_depth` | 5, 10, 15, 20, 30, None | Bias--variance control |
+| `min_samples_split` | 2, 5, 10, 20 | Split regularisation |
+| `min_samples_leaf` | 1, 2, 4, 8 | Leaf-level smoothing |
+| `max_features` | sqrt, log2, 0.3, 0.5, 0.7 | Tree decorrelation (fractional options for moderate correlation) |
 | `class_weight` | None, balanced, balanced_subsample | Class imbalance handling |
+| `criterion` | gini, entropy | Split-quality criterion |
+
+Tuned RF test-set accuracy: **82.20 %** (AUC-ROC 0.7845, F1 0.4642 at τ=0.5).
+5-fold stratified CV accuracy on the train split: **81.89 % ± 0.59 %**
+(range 81.12–82.71) — good generalisation sanity check vs the 82.20 %
+test-set number.
 
 <br>
 
@@ -521,6 +676,10 @@ Figures:  rf_roc_pr_curves.png, rf_confusion_matrix.png,
 2. Vaswani, A., et al. (2017). Attention Is All You Need. *NeurIPS*.
 3. Gorishniy, Y., et al. (2021). Revisiting Deep Learning Models for Tabular Data. *NeurIPS*.
 4. Huang, X., et al. (2020). TabTransformer: Tabular Data Modeling Using Contextual Embeddings. *arXiv:2012.06678*.
+5. Devlin, J., et al. (2019). BERT: Pre-training of Deep Bidirectional Transformers for Language Understanding. *NAACL*. *(MTLM recipe used by Novelty N4.)*
+6. Rubachev, I., et al. (2022). Revisiting Pretraining Objectives for Tabular Deep Learning. *arXiv:2207.03208*. *(Masked-tabular-language-modelling evidence on small datasets.)*
+7. Press, O., Smith, N., & Lewis, M. (2022). Train Short, Test Long: Attention with Linear Biases Enables Input Length Extrapolation. *ICLR*. *(ALiBi — inspires `TemporalDecayBias`, Novelty N3.)*
+8. Lin, T.-Y., et al. (2017). Focal Loss for Dense Object Detection. *ICCV*. *(`FocalLoss` in `src/losses.py`.)*
 
 <br>
 

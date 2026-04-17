@@ -465,6 +465,124 @@ class TabularTransformer(nn.Module):
             f"params={self.count_parameters():,})"
         )
 
+    # ---------------------------------------------------- inference helpers
+    @torch.no_grad()
+    def predict_logits(
+        self,
+        loader,
+        device: Optional[torch.device] = None,
+        *,
+        return_attn: bool = False,
+    ) -> Dict[str, torch.Tensor]:
+        """
+        Run the model in ``eval()`` mode over a ``DataLoader`` and return
+        per-sample logits (and optionally the per-layer attention tensors
+        concatenated along the batch axis) as CPU tensors.
+
+        Returns a dict with the keys:
+
+        * ``"logit"`` — ``(N,)`` float32 CPU tensor of pre-sigmoid scores.
+        * ``"label"`` — ``(N,)`` float32 CPU tensor of ground-truth labels
+          collected from each batch's ``"label"`` entry.
+        * ``"attn_weights"`` — only when ``return_attn=True``; a list of
+          ``n_layers`` tensors of shape ``(N, n_heads, seq_len, seq_len)``.
+
+        This helper is the canonical way to score a dataset once training
+        has completed; it replaces the hand-rolled inference loops that
+        would otherwise accumulate in the notebook / downstream scripts.
+        """
+        self.eval()
+        if device is None:
+            device = next(self.parameters()).device
+
+        logits_chunks: List[torch.Tensor] = []
+        label_chunks: List[torch.Tensor] = []
+        attn_chunks: Optional[List[List[torch.Tensor]]] = None
+
+        for batch in loader:
+            # Move only what the model needs.
+            moved: Dict[str, Any] = {}
+            for k, v in batch.items():
+                if isinstance(v, dict):
+                    moved[k] = {kk: vv.to(device, non_blocking=True) for kk, vv in v.items()}
+                elif isinstance(v, torch.Tensor):
+                    moved[k] = v.to(device, non_blocking=True)
+                else:
+                    moved[k] = v
+            out = self(moved, return_attn=return_attn)
+            logits_chunks.append(out["logit"].detach().cpu())
+            if "label" in batch:
+                label_chunks.append(batch["label"].detach().cpu())
+            if return_attn:
+                if attn_chunks is None:
+                    attn_chunks = [[] for _ in range(len(out["attn_weights"]))]
+                for i, w in enumerate(out["attn_weights"]):
+                    attn_chunks[i].append(w.detach().cpu())
+
+        result: Dict[str, torch.Tensor] = {
+            "logit": torch.cat(logits_chunks, dim=0),
+        }
+        if label_chunks:
+            result["label"] = torch.cat(label_chunks, dim=0)
+        if attn_chunks is not None:
+            result["attn_weights"] = [
+                torch.cat(layer, dim=0) for layer in attn_chunks
+            ]
+        return result
+
+    @torch.no_grad()
+    def predict_proba(
+        self,
+        loader,
+        device: Optional[torch.device] = None,
+    ) -> torch.Tensor:
+        """Convenience wrapper around :meth:`predict_logits` — returns the
+        sigmoid-of-logit probability tensor ``(N,)`` on CPU."""
+        logits = self.predict_logits(loader, device=device)["logit"]
+        return torch.sigmoid(logits)
+
+    @staticmethod
+    def ensemble_probabilities(
+        probabilities: Sequence[torch.Tensor],
+        mode: Literal["arithmetic", "geometric"] = "arithmetic",
+    ) -> torch.Tensor:
+        """
+        Combine per-seed probability vectors into a single ensemble
+        probability vector.
+
+        Parameters
+        ----------
+        probabilities
+            Sequence of 1-D probability tensors, all of identical length.
+            Typically produced by :meth:`predict_proba` on checkpoints from
+            different seeds.
+        mode
+            * ``"arithmetic"`` — simple mean. Default; the most common
+              ensembling choice for binary classifiers.
+            * ``"geometric"`` — geometric mean in log-odds space, i.e.
+              ``σ(mean(logit))``. Equivalent to averaging log-odds then
+              re-applying sigmoid; more robust to individual over-confidence.
+
+        Returns
+        -------
+        A single probability tensor ``(N,)`` on CPU.
+
+        This is the minimum-viable ensembling helper; callers that want
+        weighted or stacking ensembles should implement the aggregation
+        themselves and feed the result into their evaluation pipeline.
+        """
+        if not probabilities:
+            raise ValueError("probabilities cannot be empty")
+        stacked = torch.stack([p.detach().cpu().float() for p in probabilities], dim=0)
+        if mode == "arithmetic":
+            return stacked.mean(dim=0)
+        if mode == "geometric":
+            eps = 1e-7
+            p = stacked.clamp(eps, 1.0 - eps)
+            mean_logit = torch.log(p / (1.0 - p)).mean(dim=0)
+            return torch.sigmoid(mean_logit)
+        raise ValueError(f"mode must be 'arithmetic' or 'geometric', got {mode!r}")
+
     # ---------------------------------------------------- pretrained loading
     def load_pretrained_encoder(
         self,
@@ -477,41 +595,108 @@ class TabularTransformer(nn.Module):
         """
         Load a previously-trained state dict into this model.
 
-        Intended for the MTLM → supervised fine-tuning transition (Plan
-        §8.5.5). The MTLM pretrain checkpoint contains ``embedding.*`` and
-        ``encoder.*`` keys (plus MTLM-head keys that this model doesn't
-        have); with ``strict=False`` the matching keys are applied and the
-        extras are ignored silently. The ``classifier``,  ``head_norm``,
-        and optional ``aux_pay0_head`` stay at their fresh initialisation
-        — per the plan, the supervised objective re-learns the head.
+        Accepts two on-disk artefact shapes transparently:
 
-        Use the caller-side two-stage learning-rate recipe from Plan §8.5.5
-        (peak LR for the head, ~5× smaller for the pretrained encoder) in
-        ``train.py``; this method does not touch the optimiser.
+        1. **Full checkpoint bundle** — ``<path>`` + ``<path>.weights`` +
+           ``<path>.meta.json`` as produced by
+           :func:`utils.save_checkpoint`. Detected by the presence of the
+           ``.weights`` sidecar. Routes through
+           :func:`utils.load_checkpoint` which enforces the
+           SECURITY_AUDIT C-1 weights-only default.
+        2. **Raw state dict** — a single ``torch.save(...)``-style file
+           containing only the ``embedding.*`` / ``encoder.*`` keys (this
+           is the ``encoder_pretrained.pt`` artefact emitted by
+           :mod:`src.train_mtlm`). Loaded via ``torch.load(weights_only=...)``
+           and applied with ``strict=strict``.
 
-        Parameters mirror ``utils.load_checkpoint``:
+        Intended for the MTLM → supervised fine-tuning transition
+        (Plan §8.5.5). With ``strict=False`` the matching keys are
+        applied and the extras are ignored silently; the ``classifier``,
+        ``head_norm``, and optional ``aux_pay0_head`` stay at their fresh
+        initialisation — per the plan, the supervised objective re-learns
+        the head. Use the caller-side two-stage LR in ``train.py`` to
+        honour the §8.5.5 rate-ratio recipe.
 
-        * ``strict``        — ``False`` is the intended default here.
-        * ``trust_source``  — set ``True`` only for checkpoints you
-          produced yourself. Default uses the weights-only sidecar
-          (no pickle execution).
-        * ``map_location``  — forwarded to ``torch.load``.
+        Parameters
+        ----------
+        checkpoint_path
+            Either the full-bundle ``<path>.pt`` OR a raw state-dict file.
+        strict
+            ``False`` is the intended default for the MTLM → supervised
+            transition (the classification head is absent from the MTLM
+            checkpoint by design).
+        trust_source
+            Set ``True`` only for checkpoints you produced yourself. The
+            default (``False``) uses ``weights_only=True`` at the
+            ``torch.load`` layer — no pickle execution.
+        map_location
+            Forwarded to ``torch.load``.
+
+        Returns
+        -------
+        Dict with at least a ``"metadata"`` entry (possibly empty for raw
+        state-dict files), plus ``"missing_keys"`` / ``"unexpected_keys"``
+        lists when ``strict=False``.
         """
+        from pathlib import Path as _Path  # local alias to avoid top-level import change
         from utils import load_checkpoint  # local import to avoid circularity
 
-        checkpoint = load_checkpoint(
-            checkpoint_path,
-            self,
-            strict=strict,
-            trust_source=trust_source,
+        path = _Path(checkpoint_path)
+        sidecar = path.with_suffix(path.suffix + ".weights")
+
+        if sidecar.is_file():
+            # Full bundle — the sidecar path is what load_checkpoint actually
+            # consumes under trust_source=False.
+            checkpoint = load_checkpoint(
+                path,
+                self,
+                strict=strict,
+                trust_source=trust_source,
+                map_location=map_location,
+            )
+            logger.info(
+                "TabularTransformer: loaded pretrained encoder (bundle) from %s "
+                "(classification head left at fresh init)",
+                path,
+            )
+            return checkpoint
+
+        # Raw state dict — torch.load it directly.
+        if not path.is_file():
+            raise FileNotFoundError(f"No checkpoint found at: {path}")
+        state = torch.load(
+            path,
             map_location=map_location,
+            weights_only=not trust_source,
         )
+        if not isinstance(state, dict):
+            raise TypeError(
+                f"Expected a state-dict (mapping of tensor names to Tensors) at "
+                f"{path}, got {type(state).__name__}. Pass a full checkpoint "
+                "bundle if you meant load_checkpoint's optimiser-state path."
+            )
+        # Shape mismatches between MTLM pretrain and supervised fine-tune are
+        # a sign of misconfiguration (different d_model or n_layers); surface
+        # them with strict=True to the user, but accept missing/extra keys.
+        incompatible = self.load_state_dict(state, strict=strict)
+        missing = list(getattr(incompatible, "missing_keys", []))
+        unexpected = list(getattr(incompatible, "unexpected_keys", []))
         logger.info(
-            "TabularTransformer: loaded pretrained encoder from %s "
-            "(classification head left at fresh init)",
-            checkpoint_path,
+            "TabularTransformer: loaded raw encoder state from %s — "
+            "%d tensors applied (missing=%d, unexpected=%d)",
+            path, len(state), len(missing), len(unexpected),
         )
-        return checkpoint
+        if missing:
+            logger.debug("Missing keys (OK for MTLM→supervised): %s", missing[:6])
+        if unexpected:
+            logger.debug("Unexpected keys (dropped): %s", unexpected[:6])
+        return {
+            "metadata": {},
+            "missing_keys": missing,
+            "unexpected_keys": unexpected,
+            "artefact_type": "raw_state_dict",
+            "path": str(path),
+        }
 
 
 # ──────────────────────────────────────────────────────────────────────────────

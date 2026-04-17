@@ -81,13 +81,17 @@ warnings.filterwarnings("ignore", category=FutureWarning)
 # Constants
 # ──────────────────────────────────────────────────────────────────────────────
 
+# Widened hyperparameter grid per Plan §9.3 — 200-iter randomised search
+# (up from the earlier 60-iter proof-of-concept) to push the RF baseline to
+# its achievable ceiling before the head-to-head comparison.
 TUNING_GRID: Dict[str, list] = {
-    "n_estimators": [100, 200, 300, 500],
-    "max_depth": [5, 10, 15, 20, None],
-    "min_samples_split": [2, 5, 10],
-    "min_samples_leaf": [1, 2, 4],
-    "max_features": ["sqrt", "log2"],
-    "class_weight": [None, "balanced", "balanced_subsample"],
+    "n_estimators":      [100, 200, 300, 500, 1000],
+    "max_depth":         [5, 10, 15, 20, 30, None],
+    "min_samples_split": [2, 5, 10, 20],
+    "min_samples_leaf":  [1, 2, 4, 8],
+    "max_features":      ["sqrt", "log2", 0.3, 0.5, 0.7],
+    "class_weight":      [None, "balanced", "balanced_subsample"],
+    "criterion":         ["gini", "entropy"],
 }
 
 # Colour palette — consistent with eda.py aesthetics
@@ -712,7 +716,7 @@ def run_rf_benchmark(
     data_path: Optional[str] = None,
     output_dir: str = "results",
     figure_dir: str = "figures",
-    n_iter: int = 60,
+    n_iter: int = 200,
     n_cv_folds: int = 5,
     seed: int = RANDOM_SEED,
     *,

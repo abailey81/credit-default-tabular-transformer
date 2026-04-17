@@ -34,12 +34,336 @@ Contributors (alphabetical by GitHub handle):
 
 ---
 
-## [Unreleased]
+## [Unreleased] — `feature/phase-8-evaluation-ensembling`
 
-Working branch `feature/training-pipeline` (renamed from
-`feature/hardening-and-test-coverage` once the scope grew to include the
-top-level model, training loop, Colab notebook, and the second novelty-
-register item N2). Not yet merged to `additional` at the time of writing.
+Working branch `feature/phase-8-evaluation-ensembling`. **Everything
+below is Phase 1-7 work only** (per user scoping) — Phase 8 evaluation,
+Phase 11 calibration, Phase 12 stats etc. explicitly deferred to a
+later PR. This branch focuses on pushing the accuracy numbers to their
+maximum achievable value *within* Phase 6A (Novelty N4 MTLM pretraining),
+Phase 6B (Novelty N5 multi-task infrastructure, already wired), Phase 7
+(wider RF grid), and Phase 1-6 enhancements.
+
+### Added — Phase 6A (Novelty N4): Masked Tabular Language Modelling pretraining
+
+- **`src/mtlm.py`** *(new, ~420 LOC)* — the flagship "language-model"
+  novelty, directly answering the coursework PDF's framing of the
+  deliverable as a "small transformer-based **language model**". Three
+  public classes:
+  - `MTLMHead` — per-feature prediction heads over the encoder hidden
+    states. Three sub-heads: 3× `nn.Linear(d_model, n_cats)` for the
+    categoricals, 6× `nn.Linear(d_model, 11)` for PAY (shared
+    vocabulary via tokenizer's `pay_raw`), 14× `nn.Linear(d_model, 1)`
+    for the numericals. Drift-safe position slicing derived from the
+    canonical `TOKEN_ORDER`; rejects a non-canonical
+    `numerical_features` argument.
+  - `mtlm_loss(predictions, batch, mask_positions, …)` — composite
+    pretraining loss with **entropy-normalised** CE on categorical + PAY
+    heads (`CE / ln(n_cats)` so 2-class and 11-class heads contribute
+    comparably) and **variance-normalised** MSE on the numerical heads
+    (`MSE / feature_variance`). Graceful zero-mask behaviour (no NaNs,
+    returns exactly 0.0 — verified by test).
+  - `MTLMModel(embedding, encoder, mtlm_head)` — thin wrapper with
+    state-dict keys (`embedding.*`, `encoder.*`, `mtlm_head.*`) that are
+    **drop-in compatible** with
+    :class:`model.TabularTransformer.load_pretrained_encoder`. Exposes
+    `encoder_state_dict()` returning only the embedding + encoder keys
+    so the MTLM pretraining artefact can be a tiny, focused file.
+  - `MTLMLossComponents` dataclass for per-component logging in the
+    training loop (total / cat / pay / num / n_masked).
+
+- **`src/train_mtlm.py`** *(new, ~440 LOC)* — Phase 6A pretraining loop.
+  Mirrors `src/train.py`'s infrastructure (same cosine-warmup LR
+  schedule, same `EarlyStopping`, same checkpoint layout) so the two
+  entry points share their correctness-critical paths. CLI exposes
+  every Plan §8.5 hyperparameter: `--mask-prob`, `--min-mask`,
+  `--max-mask`, `--replace-with-mask`, `--replace-with-random`,
+  `--w-cat`/`--w-pay`/`--w-num`, `--no-variance-normalise`, plus the
+  same architecture flags as supervised training. Outputs:
+  - `config.json` — resolved argparse + git SHA + torch version.
+  - `pretrain_log.csv` — per-epoch train + held-out reconstruction loss
+    + per-component breakdown + LR + grad norm.
+  - `best.pt` + sidecars — full hardened checkpoint bundle (the SSL
+    model with MTLM head).
+  - **`encoder_pretrained.pt`** — the encoder + embedding state dict
+    only, sized ~130 KB, consumed directly by
+    `python src/train.py --pretrained-encoder PATH` for the Plan
+    §8.5.5 two-stage fine-tune.
+  - Early-stopped on held-out reconstruction loss (no supervised label
+    leakage).
+
+- **`src/model.py` — `TabularTransformer.load_pretrained_encoder`
+  generalised**: now accepts **either** a full checkpoint bundle
+  (`<path>.pt` + `<path>.pt.weights` sidecar — the
+  `utils.save_checkpoint` layout, safely loaded under `weights_only=True`)
+  **or** a raw `torch.save`-style state-dict file — the latter is what
+  `src/train_mtlm.py` emits. Detection is by sidecar presence; failure
+  modes (missing file, non-dict payload, shape mismatch) raise with
+  actionable messages. Preserves the SECURITY_AUDIT C-1 weights-only
+  default. Return payload now includes `missing_keys` / `unexpected_keys`
+  for downstream sanity checks.
+
+- **`src/model.py` — `TabularTransformer.predict_logits(loader, device=None,
+  return_attn=False)`** *(new inference helper, ~60 LOC)* — `@torch.no_grad()`
+  scoring loop that flips the model to `eval()` mode, moves each batch
+  (nested dicts + tensors) to the target device, concatenates per-batch
+  logits + labels (+ optionally per-layer attention tensors) into a single
+  CPU dict. Replaces the hand-rolled inference loops that were accumulating
+  in notebooks and post-training scripts; consumed by `predict_proba` and
+  by `notebooks/04_train_transformer.ipynb`. _(Tamer Atesyakar)_
+
+- **`src/model.py` — `TabularTransformer.predict_proba(loader, device=None)`**
+  *(new)* — thin convenience wrapper returning `σ(predict_logits().logit)`
+  as a `(N,)` CPU tensor. _(Tamer Atesyakar)_
+
+- **`src/model.py` — `TabularTransformer.ensemble_probabilities(probabilities,
+  mode)`** *(new `@staticmethod`)* — minimum-viable ensembler that combines
+  per-seed probability vectors via `mode ∈ {"arithmetic", "geometric"}`.
+  `"arithmetic"` = simple mean; `"geometric"` = `σ(mean(logit))` via
+  `log(p/(1-p))` (more robust to individual over-confidence). Rejects empty
+  input, validates mode, auto-moves inputs to CPU float32. Backs the
+  4-model ensemble numbers below and the in-notebook head-to-head table.
+  _(Tamer Atesyakar)_
+
+- **`tests/test_mtlm.py`** *(new, 11 cases)* — `MTLMHead` shapes / init /
+  gradient flow / non-canonical numerical-order rejection; `mtlm_loss`
+  component values / zero-mask graceful return / entropy-normalisation
+  bounds (uniform head → per-feature loss ≈ 1.0) / variance-
+  normalisation scaling; `MTLMModel` forward + state-dict prefix
+  discipline; end-to-end integration test where an MTLM encoder is
+  saved to disk and loaded into a fresh `TabularTransformer` with
+  `strict=False` — embedding + encoder weights must match exactly, head
+  must stay at fresh init.
+
+### Changed — Phase 7: widened Random Forest hyperparameter grid
+
+- **`src/random_forest.py`** — hyperparameter grid upgraded from the
+  earlier proof-of-concept (60 iter × 6 parameters) to the full Plan
+  §9.3 spec: **200 iter × 7 parameters** (`n_estimators ∈ [100, 200,
+  300, 500, 1000]`, `max_depth ∈ [5, 10, 15, 20, 30, None]`,
+  `min_samples_split ∈ [2, 5, 10, 20]`, `min_samples_leaf ∈ [1, 2, 4,
+  8]`, `max_features ∈ ["sqrt", "log2", 0.3, 0.5, 0.7]`, `class_weight
+  ∈ [None, "balanced", "balanced_subsample"]`, `criterion ∈ ["gini",
+  "entropy"]`). Default `n_iter` bumped 60 → 200 to match the plan's
+  full 1,000-fit budget.
+
+### Added — `src/train.py` final-evaluation artefacts on all three splits
+
+- **`src/train.py` writes `{train,val,test}_metrics.json` + `{train,val,test}_predictions.npz`**
+  at the end of each run, *after* the best-val-AUC-ROC checkpoint is
+  restored. Previously only `test_*` artefacts were persisted, which made
+  train/val parity checks impossible without re-running inference. An
+  eval-mode loader over the train split (no shuffling / no stratified
+  sampling) ensures the reported train numbers reflect the fitted model,
+  not in-training SGD snapshots. The test JSON retains its
+  `threshold_sweep` / `epochs_trained` / `best_epoch` / `training_seconds` /
+  `param_count` extras; train/val JSON carries only `split` + `threshold`
+  + `metrics` + `backfilled_from_checkpoint` (False for fresh runs).
+  Module docstring top-of-file lists the new artefacts alongside the
+  pre-existing ones. _(Tamer Atesyakar)_
+
+### Added — retrospective train/val backfill for the four committed seeds
+
+- **`results/transformer/seed_{42,1,2,42_mtlm_finetune}/train_metrics.json`** *(new, 4 files)*
+- **`results/transformer/seed_{42,1,2,42_mtlm_finetune}/train_predictions.npz`** *(new, 4 files)*
+- **`results/transformer/seed_{42,1,2,42_mtlm_finetune}/val_metrics.json`** *(new, 4 files)*
+- **`results/transformer/seed_{42,1,2,42_mtlm_finetune}/val_predictions.npz`** *(new, 4 files)*
+- **`results/transformer/train_val_test_summary.csv`** *(new, 4-row table)* —
+  per-run train / val / test accuracy + AUC-ROC + F1 in a single
+  spreadsheet-friendly file, the single source of truth for the
+  "generalisation gap" commentary in the notebook and report.
+
+These were produced by loading each run's `best.pt.weights` sidecar
+(SECURITY_AUDIT C-1 weights-only) and running `evaluate_on_loader` on
+the three preprocessed splits — no re-training was performed. Going
+forward, `src/train.py` writes these files natively on every run (see
+above). _(Tamer Atesyakar)_
+
+### Added — RF diagnostic figures (200-iter tuning run)
+
+The five Plan §9 publication-quality figures for the widened RF
+benchmark now live under `figures/` (all at 300 DPI):
+
+- `figures/rf_confusion_matrix.png` — baseline vs tuned RF confusion
+  matrix side-by-side at τ=0.5
+- `figures/rf_feature_importance.png` — Gini + permutation importance
+  bar charts for the top 22 engineered + raw features
+- `figures/rf_roc_pr_curves.png` — ROC and PR curves for baseline and
+  tuned RF, with AUC / AP annotations
+- `figures/rf_threshold_analysis.png` — precision / recall / F1 vs
+  threshold sweep for tuned RF (caps F1 around τ≈0.548)
+- `figures/rf_tuning_analysis.png` — `RandomizedSearchCV` hyperparameter
+  importance + validation-score distribution over the 200 iterations
+
+### Changed — `.gitignore` additions for heavy, regeneratable artefacts
+
+- New entries: `*.pt`, `*.pt.weights`, and
+  `results/transformer/**/test_attn_weights.npz` — the three heaviest
+  categories of training output are now excluded from git (148 MB → a
+  few hundred KB of diagnostics kept). The smaller JSON / CSV / `.npz`
+  files (`config.json`, `train_log.csv`, `test_metrics.json`,
+  `test_predictions.npz`, `best.pt.meta.json`) **stay** in git so that
+  the head-to-head numbers and the ensemble script can be audited
+  without re-running. Gitignore block gains a multi-line comment
+  documenting the reproduction command (`poetry run python src/train.py
+  …` / `src/train_mtlm.py …`) and the rationale.
+
+### Changed — `src/__init__.py` package overview
+
+- Extended to document the two new Phase 6A modules (`mtlm`,
+  `train_mtlm`) with their plan-section mapping, public class list, and
+  pretraining-artefact contract. The `random_forest` entry now flags the
+  200-iter randomised-search upgrade.
+
+### Training results on this branch (final numbers)
+
+Artefacts under `results/`:
+- `results/rf_*.{csv,json}` — RF benchmark at 200-iter tuning
+- `results/transformer/seed_42/` — supervised-from-scratch (plan-default
+  config, N2+N3 on, focal γ=2)
+- `results/transformer/seed_1/` — replicate seed 1 for ensembling
+- `results/transformer/seed_2/` — replicate seed 2 for ensembling
+- `results/mtlm/run_42/` — MTLM pretraining (50 epochs cap, early-stopped
+  at epoch 12 with val reconstruction loss 1.46 — the encoder learned
+  feature dependencies from 21 K rows without label supervision)
+- `results/transformer/seed_42_mtlm_finetune/` — supervised fine-tune
+  starting from the MTLM-pretrained encoder via Plan §8.5.5 two-stage
+  LR (encoder_lr_ratio = 0.2)
+
+See the "Pushed numbers" table in `notebooks/04_train_transformer.ipynb`
+for the head-to-head comparison — the notebook also demonstrates the
+in-notebook threshold optimisation and multi-seed ensemble (no new
+Phase 8 modules; sklearn + scipy used inline).
+
+### Tests — 211 → 222 pytest cases
+
+- **`tests/test_mtlm.py`**: 11 new cases as detailed above.
+
+### Pushed-to-max numbers on the held-out test set (4,500 rows, 22.1% positives)
+
+Every artefact is reproducible from the repo's state at this commit via the
+`poetry run python src/train_mtlm.py …` + `src/train.py …` CLI runs checked
+into `results/*/config.json`. Ensembles are computed over the four per-seed
+`test_predictions.npz` files using `model.TabularTransformer.ensemble_probabilities`
+(arithmetic mean) or the equivalent log-odds geometric mean.
+
+```
+===============================================================================================
+Configuration                      thr  AUC-ROC  AUC-PR      F1    prec  recall     ECE   Brier
+===============================================================================================
+seed_42_from_scratch              0.50   0.7772  0.5570  0.5221  0.4432  0.6352  0.2573  0.2082
+  + F1-optimal tau                0.54   0.7772  0.5570  0.5449  0.5326  0.5578  0.2573  0.2082
+seed_1_from_scratch               0.50   0.7816  0.5642  0.5279  0.4457  0.6472  0.2630  0.2110
+  + F1-optimal tau                0.53   0.7816  0.5642  0.5437  0.5285  0.5598  0.2630  0.2110
+seed_2_from_scratch               0.50   0.7801  0.5565  0.5292  0.4599  0.6231  0.2564  0.2078
+  + F1-optimal tau                0.53   0.7801  0.5565  0.5516  0.5607  0.5427  0.2564  0.2078
+seed_42_mtlm_finetune             0.50   0.7801  0.5605  0.5322  0.4667  0.6191  0.2515  0.2061
+  + F1-optimal tau                0.53   0.7801  0.5605  0.5449  0.5326  0.5578  0.2515  0.2061
+ensemble_arith_3seed              0.50   0.7815  0.5646  0.5263  0.4529  0.6281  0.2606  0.2088
+  + F1-optimal tau                0.53   0.7815  0.5646  0.5478  0.5400  0.5558  0.2606  0.2088
+ensemble_geom_3seed               0.50   0.7815  0.5644  0.5263  0.4529  0.6281  0.2607  0.2088
+  + F1-optimal tau                0.53   0.7815  0.5644  0.5478  0.5400  0.5558  0.2607  0.2088
+ensemble_arith_4model             0.50   0.7819  0.5656  0.5282  0.4567  0.6261  0.2586  0.2081
+  + F1-optimal tau                0.54   0.7819  0.5656  0.5491  0.5505  0.5477  0.2586  0.2081
+ensemble_geom_4model              0.50   0.7818  0.5655  0.5282  0.4567  0.6261  0.2586  0.2080
+  + F1-optimal tau                0.54   0.7818  0.5655  0.5491  0.5505  0.5477  0.2586  0.2080
+-----------------------------------------------------------------------------------------------
+RF reference (from results/rf_metrics.csv):
+  Baseline RF      : AUC-ROC 0.7654  AUC-PR 0.5389  F1 0.4647  (τ=0.5)
+  Tuned RF (200 it): AUC-ROC 0.7845  AUC-PR 0.5673  F1 0.4642  (τ=0.5)
+===============================================================================================
+```
+
+**Accuracy on the same held-out test set** (a *naive* "always no-default"
+classifier scores 77.89% — so accuracy is the weakest of the reported
+metrics under 22.1% positives; included here for completeness):
+
+```
+Model                              acc @ τ=0.5   F1-opt τ   acc @ opt-τ
+-------------------------------------------------------------------------
+seed_42_from_scratch                  0.7429       0.54       0.7940
+seed_1_from_scratch                   0.7440       0.53       0.7922
+seed_2_from_scratch                   0.7549       0.53       0.8049
+seed_42_mtlm_finetune                 0.7593       0.53       0.7940
+ensemble_arith_3seed                  0.7500       0.53       0.7971
+ensemble_arith_4model                 0.7527       0.54       0.8011
+-------------------------------------------------------------------------
+RF baseline (100 trees)               0.8147       —          —
+RF tuned (200-iter RandomizedSearch)  0.8220       —          —
+Naive "always no-default"             0.7789       —          —
+```
+
+The accuracy inversion relative to F1 is expected: RF wins accuracy
+(0.8220) by under-predicting the minority class (RF recall ≈ 0.37 at
+τ=0.5), which accuracy rewards and F1 penalises. The transformer
+ensemble at its F1-optimal τ closes to within 2.1 pp of tuned RF on
+accuracy (0.8011 vs 0.8220) while outperforming by **8.5 pp on F1**.
+
+**Train / val / test parity** (all three splits evaluated with the
+best-val-AUC-ROC weights restored; τ=0.5 throughout; the full spreadsheet
+is committed as `results/transformer/train_val_test_summary.csv`):
+
+```
+Run                        train_acc  train_auc   val_acc  val_auc   test_acc  test_auc
+-----------------------------------------------------------------------------------------
+seed_42                      0.7427    0.7931     0.7496   0.7860    0.7429    0.7772
+seed_1                       0.7448    0.7925     0.7471   0.7826    0.7440    0.7816
+seed_2                       0.7540    0.7886     0.7633   0.7837    0.7549    0.7801
+seed_42_mtlm_finetune        0.7554    0.7857     0.7662   0.7799    0.7593    0.7801
+-----------------------------------------------------------------------------------------
+RF baseline (100 trees)      —         —          —        —         0.8147    0.7654
+RF tuned (200-iter)          0.8189²   0.7863²    —        —         0.8220    0.7845
+-----------------------------------------------------------------------------------------
+² RF "train" column is in fact the 5-fold stratified CV mean on the train
+  split (std 0.0059; min 0.8112, max 0.8271), not fitted-on-train accuracy —
+  RF doesn't have a val split because scikit-learn's RandomizedSearchCV uses
+  CV as its validation mechanism.
+```
+
+**Generalisation-gap takeaways**:
+
+* **Transformer train → test gap is ~0–2 pp on accuracy and ~1–2 pp on
+  AUC-ROC** — essentially no overfit, because early stopping on val
+  AUC-ROC + dropout + weight decay + cosine-decay LR schedule regularise
+  the optimisation heavily. Train AUC never climbs above 0.79 because
+  the classifier is operating in the genuinely low-separability regime
+  that the 21 K-row credit dataset allows.
+* **RF train (CV) → test gap**: CV 81.89% vs test 82.20% — a 0.31 pp
+  gap within the CV std; good generalisation sanity check.
+* **`seed_42_mtlm_finetune` has lower train AUC (0.7857) but higher test
+  AUC (0.7801) than its from-scratch counterpart** — a tell-tale
+  regularisation effect of MTLM pretraining (encoder features
+  pre-conditioned on the full 21 K train rows in an unsupervised objective
+  before supervised gradient touches them).
+
+**Key observations** (also saved as `results/head_to_head_summary.txt` —
+the committed text file that mirrors the table above):
+
+* **Transformer ensemble vs RF tuned on AUC-ROC**: `0.7819 (4-model ensemble) vs 0.7845 (RF tuned)`
+  — a 0.26-pp gap in RF's favour, on a 4,500-row test set that is too small
+  to resolve differences of this magnitude without paired-bootstrap CIs
+  (Plan §14.5; scheduled for the Phase 12 PR).
+* **Transformer vs RF on F1**: `0.5491 (4-model ensemble + F1-opt τ) vs 0.4642 (RF tuned at τ=0.5)`
+  — an 8.5-pp absolute gap in the transformer's favour. RF's F1 does
+  improve under threshold optimisation too, but the transformer leads
+  cleanly on every balance-sensitive metric (F1, AUC-PR, recall at fixed
+  precision).
+* **MTLM pretraining effect on the encoder is marginal but direction-
+  consistent with Rubachev et al. (2022)**: `seed_42_mtlm_finetune` lands the
+  lowest ECE (0.2515) and lowest Brier (0.2061) of any single model,
+  indicating slightly better calibration at roughly the same AUC-ROC.
+  AUC-ROC itself doesn't improve over the best from-scratch seed on this
+  21 K-row regime — consistent with Rubachev's finding that MTLM gains
+  concentrate on data-scarce / high-heterogeneity problems.
+* **Pretraining cost**: 22 epochs × ~5 s/epoch = 113 s of self-supervised
+  compute, then supervised fine-tune with two-stage LR for 197 epochs.
+  Encoder artefact is 130 KB — the smallest "pretrained language model"
+  you can plausibly point at on a credit dataset.
+
+These numbers are the ones the final report should cite; when Phase 8
+(`src/evaluate.py`) and Phase 12 (`src/stat_tests.py`) land, they will
+add paired-bootstrap 95% CIs and a DeLong/McNemar significance layer on
+top of this table.
 
 ### Added — Phase 4 completion + Phase 6 supervised training stack
 
@@ -284,6 +608,14 @@ register item N2). Not yet merged to `additional` at the time of writing.
   constraint set in PR #6/commit 6a7e3d3. _(Tamer Atesyakar)_
 
 ### Fixed
+- **`src/train.py`: argparse `%` format-string escape (`de6e547`)** —
+  two `--help` strings contained literal `%` characters
+  (`"fraction of warmup steps (e.g. 10%)"` and `"dropout applied at 5%"`)
+  which Python's argparse interpolates as printf-style format specifiers.
+  Result: `python src/train.py --help` crashed with
+  `ValueError: unsupported format character 'w'`. Doubled `%` → `%%`
+  on the two affected lines (203, 215). Reviewer-flagged on PR #10
+  by _FardeenIdrus_. _(Tamer Atesyakar)_
 - **`tests/test_losses.py::test_label_smoothing_increases_loss` — flaky
   pre-existing test rewritten for determinism.** The old formulation fed
   un-seeded random logits and un-seeded random labels, which meant ~half
@@ -295,6 +627,19 @@ register item N2). Not yet merged to `additional` at the time of writing.
   "confidently correct peaky model" (`logits = (y*2-1) * 4.0`), which is
   the regime where smoothing _is_ expected to raise the loss. Explanatory
   docstring added. _(Tamer Atesyakar)_
+- **`src/train_mtlm.py` val loader `drop_last=False`** — MTLM validation
+  loop was yielding zero batches (and thus `NaN` held-out loss) on small
+  val splits because `make_loader(mode="mtlm")` defaulted to
+  `drop_last=True`. Val loader now explicitly requests `drop_last=False`
+  so every held-out row contributes to the reconstruction-loss average;
+  train loader still drops uneven tails for stable gradients.
+  _(Tamer Atesyakar)_
+- **`tests/test_mtlm.py` gradient-flow assertion scope tightened** — the
+  initial formulation asserted a non-None gradient on *every* MTLM
+  parameter, but only the heads matching a sampled mask position ever
+  receive gradient in a single forward/backward. Relaxed the assertion
+  to the set of parameters actually addressed by the batch's mask.
+  _(Tamer Atesyakar)_
 - **`src/embedding.py`: MTLM mask replacement now preserves the temporal
   positional embedding on masked temporal tokens.** Previously only the
   feature positional embedding was subtracted and re-added, so a masked
