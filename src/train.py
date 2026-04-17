@@ -200,7 +200,7 @@ def _build_parser() -> argparse.ArgumentParser:
     g.add_argument("--beta2", type=float, default=0.999)
     g.add_argument("--eps", type=float, default=1e-8)
     g.add_argument("--warmup-frac", type=float, default=0.10,
-                   help="Plan §8.2: 5–10% warmup. Default 10%.")
+                   help="Plan §8.2: 5–10%% warmup. Default 10%%.")
     g.add_argument("--min-lr-frac", type=float, default=0.01,
                    help="Cosine floor as a fraction of peak LR.")
 
@@ -212,7 +212,7 @@ def _build_parser() -> argparse.ArgumentParser:
     g.add_argument("--min-delta", type=float, default=1e-4)
     g.add_argument("--batch-size", type=int, default=256)
     g.add_argument("--stratified-batches", action="store_true",
-                   help="Plan §8.8 — every batch contains ~22.1% positives.")
+                   help="Plan §8.8 — every batch contains ~22.1%% positives.")
     g.add_argument("--num-workers", type=int, default=0)
 
     # Fine-tuning after MTLM (Plan §8.5.5)
