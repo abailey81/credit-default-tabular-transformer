@@ -120,9 +120,16 @@ def build_numerical_vocab() -> Dict[str, int]:
     """
     Map numerical feature names → their fixed integer identity indices.
 
-    The identity goes into a single shared embedding table; the scaled value
-    is handled by a separate linear projection on the model side. See
-    PROJECT_PLAN.md §5.2.1 and FeatureEmbedding in src/embedding.py.
+    The identity goes into a single shared embedding table
+    (:class:`~embedding.FeatureEmbedding.num_feature_embedding`); the scaled
+    value is handled by a separate linear projection on the model side. See
+    PROJECT_PLAN.md §5.2.1.
+
+    This helper is primarily a documentation / sanity artefact — the
+    production code uses :data:`NUMERICAL_FEATURES` directly via
+    ``enumerate``. Kept because :mod:`tests.test_tokenizer` asserts its
+    shape, which protects against silent reordering of
+    :data:`NUMERICAL_FEATURES`.
     """
     return {feature: idx for idx, feature in enumerate(NUMERICAL_FEATURES)}
 
@@ -614,14 +621,32 @@ class MTLMCollator:
 
 if __name__ == "__main__":
     import json
+    import sys
     from pathlib import Path
+
+    # UTF-8 stdout so box-drawing separators print cleanly on Windows.
+    for _s in (sys.stdout, sys.stderr):
+        if hasattr(_s, "reconfigure"):
+            try:
+                _s.reconfigure(encoding="utf-8", errors="replace")
+            except (AttributeError, ValueError):
+                pass
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s  %(message)s")
 
     # Use the real preprocessed metadata + train scaled CSV shipped with the repo.
     root = Path(__file__).resolve().parent.parent
-    meta = json.loads((root / "data/processed/feature_metadata.json").read_text())
-    df = pd.read_csv(root / "data/processed/train_scaled.csv").head(128)
+    meta_path = root / "data/processed/feature_metadata.json"
+    csv_path = root / "data/processed/train_scaled.csv"
+    if not meta_path.is_file() or not csv_path.is_file():
+        print(
+            "[SKIP] tokenizer.py smoke test requires preprocessing output.\n"
+            "       Run `poetry run python run_pipeline.py --preprocess-only` "
+            "first to materialise data/processed/*.csv."
+        )
+        sys.exit(0)
+    meta = json.loads(meta_path.read_text())
+    df = pd.read_csv(csv_path).head(128)
 
     cat_vocab = build_categorical_vocab(meta)
     print(f"cat vocab: {cat_vocab}")

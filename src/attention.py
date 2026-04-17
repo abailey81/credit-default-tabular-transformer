@@ -87,9 +87,10 @@ class MultiHeadAttention(nn.Module):
         where head_i = Attention(X·W_Qi, X·W_Ki, X·W_Vi)
 
     Args:
-        d_model: Model dimension (default 64).
+        d_model: Model dimension. Default ``32`` matches Plan §6.11
+            (~28K-parameter encoder target for the 21K-row training split).
         n_heads: Number of attention heads (default 4).
-        dropout: Dropout rate for attention weights (default 0.1).
+        dropout: Attention-weight (post-softmax) dropout rate (default 0.1).
 
     Input:
         x: (B, seq_len, d_model) — token embeddings.
@@ -101,7 +102,7 @@ class MultiHeadAttention(nn.Module):
 
     def __init__(
         self,
-        d_model: int = 64,
+        d_model: int = 32,
         n_heads: int = 4,
         dropout: float = 0.1,
     ):

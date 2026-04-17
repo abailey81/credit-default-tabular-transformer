@@ -43,14 +43,14 @@ class FeedForward(nn.Module):
     Expansion factor d_ff / d_model = 4 is standard (Vaswani 2017).
 
     Args:
-        d_model: Token embedding dimension.
-        d_ff:    Hidden dimension. Defaults to 4 * d_model.
-        dropout: Dropout applied between the two linear layers.
+        d_model: Token embedding dimension. Default ``32`` matches Plan §6.11.
+        d_ff:    Hidden dimension. Defaults to ``4 * d_model``.
+        dropout: Hidden-layer dropout, applied between GELU and ``W_2``.
     """
 
     def __init__(
         self,
-        d_model: int = 64,
+        d_model: int = 32,
         d_ff: int | None = None,
         dropout: float = 0.1,
     ):
@@ -88,35 +88,58 @@ class TransformerBlock(nn.Module):
     """
     One PreNorm transformer block:
 
-        x = x + Dropout(MultiHeadAttention(LayerNorm(x), attn_bias))
-        x = x + Dropout(FeedForward(LayerNorm(x)))
+        x = x + residual_dropout( MultiHeadAttention( LayerNorm(x), attn_bias ) )
+        x = x + residual_dropout( FeedForward( LayerNorm(x) ) )
 
     PreNorm (as in GPT-2 and FT-Transformer) keeps the residual path clean —
     gradients flow directly through the addition without passing through
     LayerNorm, giving more stable training than PostNorm (Vaswani 2017).
 
+    The three dropout hyperparameters are **independently ablatable** per
+    Plan §6.3 and Ablation A12:
+
+    * ``attn_dropout``     — post-softmax attention-weight dropout
+    * ``ffn_dropout``      — FFN hidden-layer dropout (between GELU and W_2)
+    * ``residual_dropout`` — dropout on each sub-layer's output before the
+      residual add
+
+    Passing only ``dropout`` sets all three to that value (legacy behaviour);
+    explicit kwargs override per-channel. This matters for A12 where the plan
+    treats attention-weight dropout and FFN/residual dropout as separate axes.
+
     Args:
-        d_model: Token embedding dimension.
-        n_heads: Number of attention heads.
-        d_ff:    FFN hidden dimension. Defaults to 4 * d_model.
-        dropout: Shared dropout rate (attention weights, FFN inner, residual).
+        d_model: Token embedding dimension. Default ``32`` matches Plan §6.11.
+        n_heads: Number of attention heads (default 4).
+        d_ff:    FFN hidden dimension. Defaults to ``4 * d_model``.
+        dropout: Shared default for all three dropout channels.
+        attn_dropout: Attention-weight dropout. Defaults to ``dropout``.
+        ffn_dropout:  FFN-hidden dropout. Defaults to ``dropout``.
+        residual_dropout: Residual-branch dropout. Defaults to ``dropout``.
     """
 
     def __init__(
         self,
-        d_model: int = 64,
+        d_model: int = 32,
         n_heads: int = 4,
         d_ff: int | None = None,
         dropout: float = 0.1,
+        *,
+        attn_dropout: float | None = None,
+        ffn_dropout: float | None = None,
+        residual_dropout: float | None = None,
     ):
         super().__init__()
+        attn_p = dropout if attn_dropout is None else attn_dropout
+        ffn_p = dropout if ffn_dropout is None else ffn_dropout
+        res_p = dropout if residual_dropout is None else residual_dropout
+
         self.ln1 = nn.LayerNorm(d_model)
         self.attention = MultiHeadAttention(
-            d_model=d_model, n_heads=n_heads, dropout=dropout
+            d_model=d_model, n_heads=n_heads, dropout=attn_p
         )
         self.ln2 = nn.LayerNorm(d_model)
-        self.ffn = FeedForward(d_model=d_model, d_ff=d_ff, dropout=dropout)
-        self.residual_dropout = nn.Dropout(p=dropout)
+        self.ffn = FeedForward(d_model=d_model, d_ff=d_ff, dropout=ffn_p)
+        self.residual_dropout = nn.Dropout(p=res_p)
 
     def forward(
         self,
@@ -244,32 +267,70 @@ class TemporalDecayBias(nn.Module):
 
 class TransformerEncoder(nn.Module):
     """
-    Stacks n_layers TransformerBlocks, threading the same temporal-decay bias
-    (if provided) through every block. Collects per-layer attention weights
-    for attention rollout (Abnar & Zuidema, 2020) in the interpretability phase.
+    Stacks ``n_layers`` :class:`TransformerBlock`s, threading the same
+    :class:`TemporalDecayBias` output (if provided) through *every* block
+    and collecting per-layer attention weights for attention rollout
+    (Abnar & Zuidema, 2020) used in the interpretability phase (Plan §12.2).
+
+    The temporal-decay bias is **shared across layers** rather than per-layer
+    by design: ALiBi (Press et al., 2022) uses a single static bias schedule
+    across depth; in our adaptation the only learnable parameter is α (one
+    scalar, or ``n_heads`` scalars in per-head mode). Sharing keeps the
+    novelty parameter count at its floor and gives Ablation A22 a single
+    clean on/off axis. A per-layer variant would multiply α by ``n_layers``
+    and complicate the ablation matrix without a principled motivation.
+
+    .. note::
+        :class:`TemporalDecayBias` registers ``neg_distance_masked`` with
+        ``persistent=False`` — the distance matrix is deterministically
+        reconstructable from ``temporal_layout`` and is therefore kept out of
+        the state-dict. If a checkpoint is loaded into a fresh encoder built
+        with a *different* ``temporal_layout`` the matrix will silently
+        differ. Callers that load checkpoints must construct the encoder
+        with an identical layout (use :func:`embedding.build_temporal_layout`
+        to avoid drift).
 
     Args:
-        d_model, n_heads, d_ff, n_layers, dropout — block/layer hyperparameters.
-        temporal_decay: Optional TemporalDecayBias module. When provided, its
-                        output is added to every block's pre-softmax attention
-                        scores. When None, the encoder behaves as a plain
-                        FT-Transformer-style stack.
+        d_model: Token embedding dimension. Default ``32`` matches Plan §6.11.
+        n_heads: Attention heads (default 4, per Plan §6.2; Ablation A3
+            sweeps {1, 2, 4, 8}).
+        d_ff:    FFN hidden dim. Defaults to ``4 * d_model``.
+        n_layers: Number of stacked blocks (default 2; Ablation A2 sweeps
+            {1, 2, 3, 4}).
+        dropout: Shared default for all three dropout channels.
+        attn_dropout / ffn_dropout / residual_dropout: Optional per-channel
+            overrides; unset channels inherit ``dropout``. Forwarded to every
+            :class:`TransformerBlock` in the stack. Enables Ablation A12.
+        temporal_decay: Optional :class:`TemporalDecayBias`. When provided,
+            its forward() output is added to every block's pre-softmax
+            attention scores. When ``None``, the encoder behaves as a plain
+            FT-Transformer-style stack.
     """
 
     def __init__(
         self,
-        d_model: int = 64,
+        d_model: int = 32,
         n_heads: int = 4,
         d_ff: int | None = None,
         n_layers: int = 2,
         dropout: float = 0.1,
+        *,
+        attn_dropout: float | None = None,
+        ffn_dropout: float | None = None,
+        residual_dropout: float | None = None,
         temporal_decay: TemporalDecayBias | None = None,
     ):
         super().__init__()
         self.blocks = nn.ModuleList(
             [
                 TransformerBlock(
-                    d_model=d_model, n_heads=n_heads, d_ff=d_ff, dropout=dropout
+                    d_model=d_model,
+                    n_heads=n_heads,
+                    d_ff=d_ff,
+                    dropout=dropout,
+                    attn_dropout=attn_dropout,
+                    ffn_dropout=ffn_dropout,
+                    residual_dropout=residual_dropout,
                 )
                 for _ in range(n_layers)
             ]
@@ -297,16 +358,37 @@ class TransformerEncoder(nn.Module):
 # ──────────────────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
+    # UTF-8 stdout so the box-drawing separators print cleanly on Windows.
+    import sys
+    for _s in (sys.stdout, sys.stderr):
+        if hasattr(_s, "reconfigure"):
+            try:
+                _s.reconfigure(encoding="utf-8", errors="replace")
+            except (AttributeError, ValueError):
+                pass
+
     B, seq_len, d_model, n_heads, n_layers = 4, 24, 64, 4, 2
 
-    # Temporal layout matching embedding.py's TOKEN_ORDER:
-    # CLS=0, SEX/EDU/MAR=1-3, PAY_0..PAY_6=4-9, LIMIT_BAL/AGE=10-11,
-    # BILL_AMT1..6=12-17, PAY_AMT1..6=18-23.
-    layout = {
-        "pay":     {"positions": [4, 5, 6, 7, 8, 9],       "months": [0, 1, 2, 3, 4, 5]},
-        "bill":    {"positions": [12, 13, 14, 15, 16, 17], "months": [0, 1, 2, 3, 4, 5]},
-        "pay_amt": {"positions": [18, 19, 20, 21, 22, 23], "months": [0, 1, 2, 3, 4, 5]},
+    # Derive the temporal layout from embedding.TOKEN_ORDER so any future
+    # reordering there is caught by the drift-detection assertion below.
+    from embedding import build_temporal_layout
+
+    layout = build_temporal_layout()
+
+    # Drift detection: compare against the canonical layout that TemporalDecayBias
+    # was designed for. A mismatch means somebody reordered TOKEN_ORDER in
+    # embedding.py without updating the temporal groups — the smoke test would
+    # then quietly test the wrong thing.
+    EXPECTED_LAYOUT = {
+        "pay":     {"positions": [4, 5, 6, 7, 8, 9],         "months": [0, 1, 2, 3, 4, 5]},
+        "bill":    {"positions": [12, 13, 14, 15, 16, 17],   "months": [0, 1, 2, 3, 4, 5]},
+        "pay_amt": {"positions": [18, 19, 20, 21, 22, 23],   "months": [0, 1, 2, 3, 4, 5]},
     }
+    assert layout == EXPECTED_LAYOUT, (
+        f"TOKEN_ORDER drift detected: build_temporal_layout() returned "
+        f"{layout} but the canonical expected layout is {EXPECTED_LAYOUT}. "
+        f"Update EXPECTED_LAYOUT here together with embedding.TOKEN_ORDER."
+    )
 
     # ── Test A: no temporal bias — plain encoder ─────────────────────────
     torch.manual_seed(0)

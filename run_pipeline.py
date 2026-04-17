@@ -31,6 +31,16 @@ import sys
 import argparse
 from pathlib import Path
 
+# Force UTF-8 for stdout/stderr on Windows (default cp1251/cp1252 cannot encode
+# characters like "×" or "→" that our provenance loggers emit). Safe no-op on
+# platforms where the default encoding is already UTF-8.
+for _stream in (sys.stdout, sys.stderr):
+    if hasattr(_stream, "reconfigure"):
+        try:
+            _stream.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, ValueError):
+            pass
+
 # Ensure src/ is importable
 _src_dir = Path(__file__).parent / "src"
 if not _src_dir.is_dir():

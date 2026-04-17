@@ -38,6 +38,11 @@ data/processed/*.csv
 # ── Jupyter ──
 .ipynb_checkpoints/
 
+# ── Test artefacts ──
+.coverage
+.pytest_cache/
+htmlcov/
+
 # ── Claude Code ──
 .claude/
 

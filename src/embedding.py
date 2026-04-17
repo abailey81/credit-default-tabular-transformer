@@ -38,7 +38,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Dict, List, Optional
 
 import torch
 import torch.nn as nn
@@ -50,21 +50,12 @@ from tokenizer import (
 )
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Vocabulary sizes for categorical features — loaded from feature_metadata.json
-# so they stay in sync if preprocessing changes.
-# ──────────────────────────────────────────────────────────────────────────────
-_metadata_path = (
-    Path(__file__).parent.parent / "data" / "processed" / "feature_metadata.json"
-)
-with open(_metadata_path) as _f:
-    _meta = json.load(_f)
-CAT_VOCAB_SIZES: Dict[str, int] = {
-    feat: info["n_categories"] for feat, info in _meta["categorical_features"].items()
-}
-
 # Fixed token order — position in this list + 1 = positional embedding index
 # (index 0 is reserved for [CLS], BERT-style).
-TOKEN_ORDER = CATEGORICAL_FEATURES + PAY_STATUS_FEATURES + NUMERICAL_FEATURES
+# ──────────────────────────────────────────────────────────────────────────────
+TOKEN_ORDER: List[str] = (
+    CATEGORICAL_FEATURES + PAY_STATUS_FEATURES + NUMERICAL_FEATURES
+)
 # ["SEX","EDUCATION","MARRIAGE","PAY_0","PAY_2",...,"PAY_6",
 #  "LIMIT_BAL","AGE","BILL_AMT1",...,"PAY_AMT6"]
 # Total: 3 + 6 + 14 = 23 feature tokens  (+1 CLS = 24 output tokens)
@@ -81,18 +72,123 @@ _SLICE_NUM = slice(9, 23)
 # ──────────────────────────────────────────────────────────────────────────────
 N_MONTHS = 6
 _TEMPORAL_MONTH: Dict[str, int] = {}
-for i, feat in enumerate(PAY_STATUS_FEATURES):
-    _TEMPORAL_MONTH[feat] = i
-for i, feat in enumerate([f"BILL_AMT{m}" for m in range(1, 7)]):
-    _TEMPORAL_MONTH[feat] = i
-for i, feat in enumerate([f"PAY_AMT{m}" for m in range(1, 7)]):
-    _TEMPORAL_MONTH[feat] = i
+for _i, _feat in enumerate(PAY_STATUS_FEATURES):
+    _TEMPORAL_MONTH[_feat] = _i
+for _i, _feat in enumerate([f"BILL_AMT{_m}" for _m in range(1, 7)]):
+    _TEMPORAL_MONTH[_feat] = _i
+for _i, _feat in enumerate([f"PAY_AMT{_m}" for _m in range(1, 7)]):
+    _TEMPORAL_MONTH[_feat] = _i
 
 # Pre-computed per-token temporal index. -1 means non-temporal.
 _TEMPORAL_INDEX_PER_TOKEN = torch.tensor(
     [_TEMPORAL_MONTH.get(feat, -1) for feat in TOKEN_ORDER],
     dtype=torch.long,
 )
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Metadata loading — lazy, so importing this module is side-effect-free and
+# works on a fresh clone before preprocessing has generated the JSON.
+# ──────────────────────────────────────────────────────────────────────────────
+
+_METADATA_PATH = (
+    Path(__file__).resolve().parent.parent / "data" / "processed" / "feature_metadata.json"
+)
+
+
+def load_cat_vocab_sizes(
+    metadata_path: Optional[Path] = None,
+) -> Dict[str, int]:
+    """
+    Load categorical vocabulary sizes from ``data/processed/feature_metadata.json``.
+
+    Raises a ``FileNotFoundError`` with an actionable message if preprocessing
+    has not yet been run. Prefer passing an explicit ``cat_vocab_sizes`` kwarg
+    to :class:`FeatureEmbedding` in unit tests so the constructor is hermetic.
+
+    Parameters
+    ----------
+    metadata_path
+        Override the default path. Primarily useful in tests and in notebooks
+        that want to exercise a non-canonical metadata file.
+    """
+    path = Path(metadata_path) if metadata_path is not None else _METADATA_PATH
+    if not path.is_file():
+        raise FileNotFoundError(
+            f"feature_metadata.json not found at {path}. "
+            "Run `poetry run python run_pipeline.py --preprocess-only` to "
+            "generate preprocessing outputs before instantiating FeatureEmbedding, "
+            "or pass an explicit cat_vocab_sizes kwarg."
+        )
+    with open(path) as f:
+        meta = json.load(f)
+    return {
+        feat: info["n_categories"]
+        for feat, info in meta["categorical_features"].items()
+    }
+
+
+def __getattr__(name: str):
+    """
+    PEP 562 module-level ``__getattr__`` — preserves the legacy
+    ``embedding.CAT_VOCAB_SIZES`` attribute while keeping the module import
+    itself side-effect-free (no disk I/O unless somebody asks for the dict).
+    Cached on first resolution so subsequent accesses are free.
+    """
+    if name == "CAT_VOCAB_SIZES":
+        value = load_cat_vocab_sizes()
+        globals()["CAT_VOCAB_SIZES"] = value
+        return value
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Drift-safe temporal layout helper — the canonical source of truth for
+# TemporalDecayBias / FeatureGroupBias and any consumer that needs positions
+# of the three temporal groups (PAY / BILL_AMT / PAY_AMT) in the full
+# 24-token sequence (CLS at index 0).
+# ──────────────────────────────────────────────────────────────────────────────
+
+_TEMPORAL_GROUPS: Dict[str, List[str]] = {
+    "pay":     list(PAY_STATUS_FEATURES),
+    "bill":    [f"BILL_AMT{_m}" for _m in range(1, 7)],
+    "pay_amt": [f"PAY_AMT{_m}" for _m in range(1, 7)],
+}
+
+
+def build_temporal_layout(
+    cls_offset: int = 1,
+) -> Dict[str, Dict[str, List[int]]]:
+    """
+    Derive the ``temporal_layout`` dict expected by
+    ``transformer.TemporalDecayBias`` from this module's canonical
+    :data:`TOKEN_ORDER`. Uses this helper keeps callers drift-free against
+    any reordering of ``TOKEN_ORDER``; hard-coded position lists in other
+    modules will silently desync if the order changes.
+
+    Parameters
+    ----------
+    cls_offset
+        Offset applied to every position index. Default ``1`` — positions
+        address the full 24-token output sequence with ``[CLS]`` at index 0.
+        Pass ``0`` to get positions in the 23-feature-token sequence
+        (no CLS prepended), e.g. for direct indexing into the pre-CLS
+        ``feature_tokens`` tensor.
+
+    Returns
+    -------
+    Dict mapping group name ∈ {"pay", "bill", "pay_amt"} to a
+    ``{"positions": List[int], "months": List[int]}`` record. Months are
+    0-indexed (0 = most recent, 5 = oldest). Positions are in the order
+    given by :data:`TOKEN_ORDER`.
+    """
+    layout: Dict[str, Dict[str, List[int]]] = {}
+    for group_name, feat_list in _TEMPORAL_GROUPS.items():
+        layout[group_name] = {
+            "positions": [cls_offset + TOKEN_ORDER.index(f) for f in feat_list],
+            "months":    list(range(len(feat_list))),
+        }
+    return layout
 
 
 class FeatureEmbedding(nn.Module):
@@ -111,28 +207,36 @@ class FeatureEmbedding(nn.Module):
     Parameters
     ----------
     d_model
-        Token embedding dimension. Plan §6.11 pins 32 for the final model;
-        64 is retained as a legacy default for existing smoke tests.
+        Token embedding dimension. Default ``32`` matches Plan §6.11.
     dropout
         Dropout applied after LayerNorm at the output.
+    cat_vocab_sizes
+        Optional explicit ``{feature_name: vocabulary_size}`` mapping for the
+        categorical features. Defaults to lazily loading from
+        ``data/processed/feature_metadata.json``; passing the dict explicitly
+        makes unit tests hermetic and skips disk I/O.
     use_temporal_pos
-        If True, add a learnable temporal-position embedding (``nn.Embedding(6, d)``)
-        to every temporal token (PAY, BILL_AMT, PAY_AMT). Non-temporal tokens
-        (CLS, SEX, EDUCATION, MARRIAGE, LIMIT_BAL, AGE) are unaffected.
-        Plan §5.4 — tested in Ablation A7.
+        If True, add a learnable temporal-position embedding
+        (``nn.Embedding(6, d)``) to every temporal token (PAY, BILL_AMT,
+        PAY_AMT). Non-temporal tokens (CLS, SEX, EDUCATION, MARRIAGE,
+        LIMIT_BAL, AGE) are unaffected. Plan §5.4 — tested in Ablation A7.
     use_mask_token
         If True, create a learnable ``[MASK]`` embedding for MTLM pretraining
         (Plan §5.4B / Phase 6A / Novelty N4). When forward() receives a batch
-        containing ``mask_positions``, the content embedding at flagged slots
-        is replaced by the shared ``[MASK]`` vector while the positional
-        embedding is preserved. No effect when absent from the batch.
+        containing ``mask_positions``, the *content* component at flagged
+        slots is replaced by the shared ``[MASK]`` vector; both the feature
+        positional embedding **and** the temporal positional embedding (if
+        active) are preserved so the model still knows *where* the masked
+        slot sits in the sequence and in time. No effect when absent from
+        the batch.
     """
 
     def __init__(
         self,
-        d_model: int = 64,
+        d_model: int = 32,
         dropout: float = 0.1,
         *,
+        cat_vocab_sizes: Optional[Dict[str, int]] = None,
         use_temporal_pos: bool = False,
         use_mask_token: bool = False,
     ):
@@ -141,10 +245,23 @@ class FeatureEmbedding(nn.Module):
         self.use_temporal_pos = use_temporal_pos
         self.use_mask_token = use_mask_token
 
+        # Lazily resolve vocabulary sizes so that importing this module is
+        # side-effect-free even on a fresh clone where preprocessing has not
+        # yet run. Tests can override the dict to skip disk I/O entirely.
+        if cat_vocab_sizes is None:
+            cat_vocab_sizes = load_cat_vocab_sizes()
+        missing = set(CATEGORICAL_FEATURES) - cat_vocab_sizes.keys()
+        if missing:
+            raise KeyError(
+                f"cat_vocab_sizes is missing entries for {sorted(missing)}; "
+                f"got {sorted(cat_vocab_sizes.keys())}"
+            )
+        self.cat_vocab_sizes: Dict[str, int] = dict(cat_vocab_sizes)
+
         # ── Categorical embeddings (SEX, EDUCATION, MARRIAGE) ──────────────
         self.cat_embeddings = nn.ModuleDict(
             {
-                feat: nn.Embedding(CAT_VOCAB_SIZES[feat], d_model)
+                feat: nn.Embedding(cat_vocab_sizes[feat], d_model)
                 for feat in CATEGORICAL_FEATURES
             }
         )
@@ -248,35 +365,43 @@ class FeatureEmbedding(nn.Module):
         feature_tokens = torch.cat([cat_tokens, pay_tokens, num_tokens], dim=1)  # (B, 23, d)
 
         # ── Optional: add temporal positional encoding to temporal tokens ──
+        # Computed once (zero vector at non-temporal slots); re-used below so
+        # the MTLM mask path can subtract and re-add it cleanly.
         if self.temporal_pos_embedding is not None:
             temporal_idx = self.temporal_index_per_token  # (23,)
-            is_temporal = temporal_idx >= 0                # (23,)
+            is_temporal = (temporal_idx >= 0).unsqueeze(-1).to(feature_tokens.dtype)  # (23, 1)
             # Clamp -1 → 0 so the lookup is safe; gate the result by is_temporal.
             safe_idx = temporal_idx.clamp(min=0)
-            temporal_emb = self.temporal_pos_embedding(safe_idx)          # (23, d)
-            temporal_emb = temporal_emb * is_temporal.unsqueeze(-1).to(temporal_emb.dtype)  # (23, d)
-            feature_tokens = feature_tokens + temporal_emb                # broadcast over batch
+            temporal_emb = self.temporal_pos_embedding(safe_idx) * is_temporal  # (23, d)
+            feature_tokens = feature_tokens + temporal_emb  # broadcast over batch
+        else:
+            temporal_emb = None
 
         # ── Optional: swap masked slots with the [MASK] embedding ──────────
+        # BERT convention: [MASK] replaces *content* (value + feature identity)
+        # while *all* positional signals are preserved. We strip both the
+        # feature-positional embedding and the temporal-positional embedding
+        # (zero on non-temporal slots) before mask substitution, then restore
+        # them — so a masked PAY_0 still carries "position 4, month 0" and a
+        # masked PAY_6 still carries "position 9, month 5". This matters for
+        # MTLM: without it, masked temporal tokens would lose their month
+        # signal while unmasked ones kept it.
         if self.mask_token is not None and "mask_positions" in batch:
             mask_positions = batch["mask_positions"].to(device)
             if mask_positions.shape != (B, 23):
                 raise ValueError(
                     f"mask_positions shape must be (B, 23), got {tuple(mask_positions.shape)}"
                 )
-            # Positional embedding is preserved; content is replaced with the
-            # shared [MASK] vector. Masked slots keep their position embedding
-            # + the mask vector; this way the model still knows "this is
-            # LIMIT_BAL, but its content was hidden".
-            content_dim = feature_tokens - self.pos_embedding(self.positions)  # remove pos
-            # Replace content at mask positions with mask_token.
+            pos_emb_23 = all_pos_emb  # (23, d)  — feature positional embeds
+            content = feature_tokens - pos_emb_23
+            if temporal_emb is not None:
+                content = content - temporal_emb
             mask_vec = self.mask_token.unsqueeze(0).unsqueeze(0)  # (1, 1, d)
             mask_bcast = mask_positions.unsqueeze(-1).to(feature_tokens.dtype)  # (B, 23, 1)
-            new_content = content_dim * (1 - mask_bcast) + mask_vec * mask_bcast
-            # Re-add positional embedding (and temporal, if active, already present
-            # in feature_tokens before we subtracted — but we also subtracted it
-            # indirectly; re-add explicit positional).
-            feature_tokens = new_content + self.pos_embedding(self.positions)
+            new_content = content * (1.0 - mask_bcast) + mask_vec * mask_bcast
+            feature_tokens = new_content + pos_emb_23
+            if temporal_emb is not None:
+                feature_tokens = feature_tokens + temporal_emb
 
         # ── Prepend [CLS] at position 0 ────────────────────────────────────
         cls_pos = self.pos_embedding(torch.zeros(1, dtype=torch.long, device=device))  # (1, d)
