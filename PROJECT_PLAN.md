@@ -477,15 +477,21 @@ class FeatureTokeniser(nn.Module):
 
 ## 6. Phase 4: Transformer Architecture
 
-**Status: [PARTIAL] IN PROGRESS** — attention (`src/attention.py` from PR #7;
-extended with an `attn_bias` hook in PR #8 for architectural novelties) and
-the encoder stack (`src/transformer.py` from PR #8: `FeedForward`,
-`TransformerBlock` with independently ablatable `attn_dropout` /
-`ffn_dropout` / `residual_dropout`, `TemporalDecayBias` = Novelty N3 with
-`scalar` / `per_head` / `off` modes, `TransformerEncoder` collecting
-per-layer attention weights for Phase 10 rollout) are landed. The top-level
-`TabularTransformer` wrapper (`src/model.py`, §6.7, §6.10, §6.11) and the
-N2 feature-group attention bias (§6.12.1) remain TODO.
+**Status: [DONE] COMPLETE** — every sub-item of Plan §6 is implemented.
+Attention (`src/attention.py`, PR #7; extended with the `attn_bias` hook
+in PR #8) + encoder stack (`src/transformer.py`: `FeedForward`,
+`TransformerBlock` with independently-ablatable
+`attn_dropout`/`ffn_dropout`/`residual_dropout`, `TemporalDecayBias` =
+Novelty N3, **`FeatureGroupBias` = Novelty N2** — 5×5 learnable bias
+matrix over the {CLS, demographic, PAY, BILL_AMT, PAY_AMT} groups with
+scalar / per_head / off modes, `TransformerEncoder` composing both
+novelty biases via elementwise sum into a single per-forward
+`attn_bias`) + top-level `TabularTransformer` wrapper (`src/model.py`,
+§6.7 / §6.10 / §6.11) are all landed. Parameter count at plan defaults:
+**28,417** — on target for the ~28K Plan §6.9 budget. Sophisticated
+helpers on `TabularTransformer`: `summary()`, `parameter_count_by_module()`,
+`get_head_params()`, `get_encoder_params()` (for the §8.5.5 two-stage
+optimiser), `load_pretrained_encoder()`.
 
 ### 6.1 Scaled Dot-Product Attention
 
@@ -842,14 +848,21 @@ src/losses.py           — FocalLoss, WeightedBCE, label smoothing utilities
 
 ## 8. Phase 6: Training Pipeline
 
-**Status: [PARTIAL] IN PROGRESS** — training infrastructure is in place:
-`src/utils.py` (deterministic seeding per §16.5.1, device selection,
-hardened checkpoint save/load with a weights-only default that closes
-SECURITY_AUDIT C-1, `EarlyStopping`, parameter accounting, UTF-8-safe
-logging), `src/dataset.py` (`StratifiedBatchSampler`, `make_loader` with
-supervised / val / test / MTLM modes, reproducible via a seeded generator).
-Still TODO: the actual training loop `src/train.py` (AdamW + cosine-warmup
-LR + grad clipping + per-epoch metric logging + `EarlyStopping.step`).
+**Status: [DONE] COMPLETE** — training infrastructure + supervised loop
+all landed: `src/utils.py` (deterministic seeding per §16.5.1, device
+selection, hardened checkpoint save/load with a weights-only default that
+closes SECURITY_AUDIT C-1, `EarlyStopping`, parameter accounting,
+UTF-8-safe logging), `src/dataset.py` (`StratifiedBatchSampler`,
+`make_loader` with supervised / val / test / MTLM modes, reproducible via
+a seeded generator), and **`src/train.py`** (~550 LOC) implementing the
+full Plan §8 spec: AdamW + linear-warmup-plus-cosine LR schedule + grad
+clipping + per-epoch CSV log + `EarlyStopping` on validation AUC-ROC +
+best-weight restore + hardened checkpoint save. Two-stage LR for MTLM
+fine-tuning (§8.5.5) and multi-task PAY_0 auxiliary objective
+(§8.6 / N5 / A16) are wired through the CLI. Every ablation axis is
+reachable via argparse flags (A2, A3, A4, A5, A7, A10, A11, A12, A16,
+A19, A21, A22). Colab + VS Code Colab extension + local Jupyter all
+drive the loop through `notebooks/04_train_transformer.ipynb`.
 
 ### 8.1 Optimiser: AdamW
 

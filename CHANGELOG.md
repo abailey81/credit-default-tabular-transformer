@@ -36,8 +36,140 @@ Contributors (alphabetical by GitHub handle):
 
 ## [Unreleased]
 
-Working branch `feature/hardening-and-test-coverage`. Not yet merged to
-`additional` at the time of writing.
+Working branch `feature/training-pipeline` (renamed from
+`feature/hardening-and-test-coverage` once the scope grew to include the
+top-level model, training loop, Colab notebook, and the second novelty-
+register item N2). Not yet merged to `additional` at the time of writing.
+
+### Added — Phase 4 completion + Phase 6 supervised training stack
+
+- **`src/model.py` (new, ~500 LOC)** — `TabularTransformer`: end-to-end
+  wiring of tokenizer → embedding → encoder → pool → 2-layer MLP head →
+  logit (Plan §6.7 / §6.10 / §6.11). Exposes every architectural switch:
+  `d_model` / `n_heads` / `n_layers` / `d_ff` / per-channel
+  `attn_dropout` / `ffn_dropout` / `residual_dropout` / `classification_dropout`,
+  `pool ∈ {cls, mean, max}` (Ablation A5), `use_temporal_pos` (A7),
+  `use_mask_token` (prereq for MTLM N4), `temporal_decay_mode` (N3 / A22),
+  `feature_group_bias_mode` (N2 / A21), `aux_pay0` (N5 / A16), and an
+  explicit `cat_vocab_sizes` override for hermetic tests. Sophisticated
+  helpers: `count_parameters`, `parameter_count_by_module`,
+  `get_head_params` + `get_encoder_params` (for the §8.5.5 two-stage
+  fine-tune optimiser), `summary()` (multi-line architecture + parameter
+  breakdown + every active switch), `__repr__` one-liner. Parameter count
+  at Plan §6.11 defaults: **28,417** — spot on the Plan §6.9 ~28K budget.
+  _(Tamer Atesyakar)_
+- **`src/train.py` (new, ~550 LOC)** — Plan §8 supervised training loop:
+  AdamW (§8.1), linear-warmup + cosine decay LR schedule (§8.2), gradient
+  clipping (§8.3), independently-ablatable dropout channels, optional
+  stratified batching (§8.8), `EarlyStopping` on validation AUC-ROC
+  (§8.5), best-weight restore, optional two-stage LR for MTLM fine-tuning
+  (§8.5.5), optional multi-task PAY_0 auxiliary CE loss (§8.6 / N5).
+  CLI covers every plan-aligned flag — one invocation is enough to run
+  any ablation from A2/A3/A4/A5/A7/A10/A11/A12/A16/A19/A21/A22 via
+  kwargs. Outputs: `config.json`, `train_log.csv`, `test_metrics.json`
+  (with threshold sweep over τ∈{0.10,…,0.60}), `test_predictions.npz`
+  (y_true / y_prob / y_pred), `test_attn_weights.npz` (per-layer attn for
+  Phase 10), hardened `best.pt` + sidecars. `--smoke-test` mode for CI
+  (2 epochs on ~500 rows). `main(argv=None)` is importable so Colab /
+  notebooks can invoke the pipeline programmatically. _(Tamer Atesyakar)_
+- **`src/transformer.py`: `FeatureGroupBias` (Novelty N2 / Plan §6.12.1
+  / Ablation A21)** — a learnable 5×5 bias matrix indexed by the
+  semantic group of (query, key) tokens. Groups: `{CLS, demographic,
+  PAY, BILL_AMT, PAY_AMT}`. Zero-initialised — the model activates the
+  prior only if it helps. Three modes: `scalar` (shared across heads),
+  `per_head`, `off`. The `TransformerEncoder` now composes this with
+  `TemporalDecayBias` (N3) via elementwise sum — keeps the per-block
+  dispatch path at exactly one `attn_bias` tensor regardless of how many
+  novelty modules are active. Completes **Phase 4** of the plan.
+  _(Tamer Atesyakar)_
+- **`src/embedding.py`: `build_group_assignment(cls_offset=1)`** —
+  drift-safe canonical group-index list derived from `TOKEN_ORDER`,
+  consumed by `FeatureGroupBias`. Group constants
+  `FEATURE_GROUP_CLS / _DEMOGRAPHIC / _PAY / _BILL / _PAY_AMT` +
+  `N_FEATURE_GROUPS = 5` + `FEATURE_GROUP_NAMES` dict for
+  display / logging. `describe_token_layout(cls_offset=1)` helper that
+  renders the 24-slot table (position / group / feature / month) for
+  notebook inclusion and report appendices. _(Tamer Atesyakar)_
+- **`src/tokenizer.py`: `pay_raw` in batch + `PAY_RAW_NUM_CLASSES = 11`** —
+  every dataset item now carries the raw PAY values shifted into
+  `[0, 10]`, directly usable as an 11-class `nn.CrossEntropyLoss` target
+  for MTLM prediction heads (Novelty N4 prep) and for the N5 multi-task
+  PAY_0 auxiliary forecast head. Populated by both
+  `tokenize_dataframe` and both collators (`dataset.default_collate`,
+  `tokenizer.MTLMCollator._default_collate`). _(Tamer Atesyakar)_
+- **`src/tokenizer.py`: `validate_dataframe_schema(df, strict=True)`** —
+  single-pass schema / PAY-range / NaN check for a post-rename raw
+  DataFrame. With `strict=True` raises on any issue; with
+  `strict=False` returns a structured report for a preprocessing
+  pipeline to act on. Plan §3. _(Tamer Atesyakar — via parallel agent)_
+- **`src/tokenizer.py`: `tokenization_summary(tensors_dict)`** —
+  diagnostic summary (per-categorical value counts, PAY state
+  distribution, severity stats, numerical-feature min/max) of a
+  `tokenize_dataframe` output. Handy in notebooks and MTLM debug.
+  _(Tamer Atesyakar — via parallel agent)_
+- **`src/tokenizer.py`: `PAY_STATE_NAMES` dict** (`{0: "no_bill",
+  1: "paid_full", 2: "minimum", 3: "delinquent"}`) + `DEMOGRAPHIC_FEATURES`
+  local copy. _(Tamer Atesyakar — via parallel agent)_
+- **`src/embedding.py`: `FeatureEmbedding.freeze_encoder(freeze=True)`** —
+  toggle `requires_grad` on every embedding parameter for the §8.5.5
+  two-stage fine-tune workflow. _(Tamer Atesyakar — via parallel agent)_
+- **`src/embedding.py`: `FeatureEmbedding.init_from_pretrained_statedict`** —
+  load only embedding-relevant keys from a larger (e.g. TabularTransformer
+  or MTLM) state dict, with auto-prefix stripping and a `{loaded,
+  missing, unexpected}` report. _(Tamer Atesyakar — via parallel agent)_
+- **`notebooks/04_train_transformer.ipynb` (new, 30 cells)** — the
+  canonical Colab + VS Code + local training notebook. Auto-detects the
+  runtime (`_detect_runtime()` returns `colab` / `vscode-local` /
+  `jupyter-local`), clones the repo + installs deps on Colab,
+  walks-up-to-pyproject locally. Imports every `src/` module
+  (no re-implementation), runs drift guards on both novelty bias layouts
+  + TOKEN_ORDER, demonstrates direct `TabularTransformer` instantiation,
+  calls `model.summary()` + `parameter_count_by_module()`, invokes
+  `train.main([...])` from Python, plots a 4-panel training-curve
+  dashboard (loss / val AUC-ROC+PR / LR schedule / gradient norm),
+  round-trips the checkpoint through `utils.load_checkpoint` for a
+  reproducibility sanity check, renders a 15-bin reliability diagram +
+  confidence histogram (ECE preview), provides a `run_seed_sweep(...)`
+  helper for the Plan §14.1 5-seed requirement, provides a
+  `run_ablation_grid(...)` helper for A5 × A22 exploration, and renders
+  a group-colour-coded [CLS]→feature attention bar chart.
+  _(Tamer Atesyakar)_
+
+### Tests — 99 → 211 pytest cases
+
+- **`tests/test_model.py` (new, 32 cases)** — forward-pass shapes,
+  pool-mode sweep, parameter-count envelope check against Plan §6.9
+  budget, gradient flow through every parameter, temporal-decay (N3)
+  integration, aux PAY_0 head (N5) forced-mask + logits shape + loss
+  composability with `pay_raw` target, pretrained-encoder loading
+  (strict=False), deterministic re-runs, `cat_vocab_sizes` override,
+  dropout-on train-mode no-NaN, feature-group bias (N2) submodule
+  creation + shape + gradient + N2-plus-N3 composability.
+  _(Tamer Atesyakar + parallel-agent contributions)_
+- **`tests/test_train.py` (new, ~22 cases)** — cosine-warmup schedule
+  (starts at 0, peaks, decays, respects `min_lr_frac`, monotonic
+  warmup+decay, rejects `total_steps=0`), loss factory (focal / wbce /
+  label-smoothing), `_resolve_focal_alpha` parser (`"balanced"` /
+  `"none"` / scalar / tuple / garbage), ECE on perfectly-calibrated
+  data = 0 / systematic overconfidence > 0, `compute_classification_metrics`
+  key set + single-class graceful handling, `evaluate_on_loader` payload
+  + attention collection, two-group optimiser construction for
+  fine-tuning (correct LR per group, aux head in head group), one-epoch
+  train loss non-increasing on a constant batch, aux head updates when
+  `aux_lambda > 0`, end-to-end smoke training produces every expected
+  artefact. _(Tamer Atesyakar)_
+- **`tests/test_transformer.py` — 11 new `FeatureGroupBias` cases** —
+  scalar / per_head output shapes, `off` returns None, zero
+  initialisation, unknown-mode rejection, out-of-range-group rejection,
+  fancy-indexing correctness (`B[group_X, group_Y]=42` → only
+  within-group cells = 42), per-head heterogeneity, gradient flow,
+  composition with `TemporalDecayBias` via encoder, plain-encoder
+  behaviour preserved when both biases None.
+  _(Tamer Atesyakar — via parallel agent)_
+- **`tests/test_tokenizer.py` — 5 new `pay_raw` cases** — key present +
+  shape + dtype + range, matches raw frame values, consistent with
+  (state, severity), flows through `default_collate` and `MTLMCollator`.
+  _(Tamer Atesyakar)_
 
 ### Added
 - **`tests/test_transformer.py` (new, ≈370 LOC, 26 cases)** — closes the

@@ -67,6 +67,7 @@ def default_collate(batch: Sequence[Dict[str, Any]]) -> Dict[str, torch.Tensor]:
         "cat_indices":    cat_indices,
         "pay_state_ids":  torch.stack([item["pay_state_ids"] for item in batch]),
         "pay_severities": torch.stack([item["pay_severities"] for item in batch]),
+        "pay_raw":        torch.stack([item["pay_raw"] for item in batch]),
         "num_values":     torch.stack([item["num_values"] for item in batch]),
         "label":          torch.stack([item["label"] for item in batch]),
     }

@@ -17,8 +17,10 @@ Data & preprocessing
 Transformer stack (Plan §§5–6 / §§8–8.5)
 ----------------------------------------
 * :mod:`tokenizer`  — hybrid PAY state+severity tokenisation (Novelty N1),
-                      :class:`tokenizer.CreditDefaultDataset`,
-                      :class:`tokenizer.MTLMCollator` (supports Novelty N4).
+                      :class:`tokenizer.CreditDefaultDataset` (now exposes
+                      ``pay_raw`` — 11-class shifted PAY values for MTLM /
+                      N5 targets), :class:`tokenizer.MTLMCollator`
+                      (supports Novelty N4).
 * :mod:`embedding`  — :class:`embedding.FeatureEmbedding` with per-feature
                       projections, [CLS] token, optional temporal positional
                       encoding (Ablation A7), optional [MASK] token for MTLM
@@ -34,6 +36,15 @@ Transformer stack (Plan §§5–6 / §§8–8.5)
                       dropout), :class:`transformer.TemporalDecayBias`
                       (Novelty N3; ALiBi-style learnable decay), and
                       :class:`transformer.TransformerEncoder`.
+* :mod:`model`      — :class:`model.TabularTransformer`, the top-level
+                      end-to-end model (Plan §6.7 / §6.10 / §6.11). Wires
+                      tokenizer → embedding → encoder → pool → classification
+                      head → logit. Exposes every architectural switch
+                      (``pool``, ``use_temporal_pos``, ``temporal_decay_mode``,
+                      independently-ablatable dropout channels,
+                      ``aux_pay0`` for Novelty N5 / Ablation A16), plus a
+                      ``load_pretrained_encoder`` helper for the §8.5.5
+                      MTLM-fine-tune transition.
 
 Training, evaluation, baseline
 ------------------------------
@@ -46,6 +57,15 @@ Training, evaluation, baseline
                     (weights-only by default) checkpoint save/load,
                     :class:`utils.EarlyStopping`, parameter accounting,
                     UTF-8-safe logging setup.
+* :mod:`train`    — Plan §8 supervised training loop: AdamW + cosine warmup
+                    (§8.2) + gradient clipping (§8.3) + early stopping on
+                    val AUC-ROC (§8.5) + optional two-stage LR fine-tuning
+                    (§8.5.5) + optional multi-task PAY_0 auxiliary head
+                    (§8.6 / N5). Invoke via ``python src/train.py`` or
+                    ``from train import main; main([...])``. Produces per-run
+                    ``config.json``, ``train_log.csv``, ``test_metrics.json``,
+                    ``test_predictions.npz``, ``test_attn_weights.npz``,
+                    and a hardened checkpoint under ``--output-dir``.
 * :mod:`random_forest` — hyperparameter-tuned Random Forest benchmark
                          (Plan §9).
 

@@ -156,6 +156,133 @@ _TEMPORAL_GROUPS: Dict[str, List[str]] = {
 }
 
 
+# ──────────────────────────────────────────────────────────────────────────────
+# Feature-group assignment — drift-safe source for Novelty N2
+# (:class:`transformer.FeatureGroupBias`). The five semantic groups are:
+#   0 = [CLS]
+#   1 = demographic (SEX / EDUCATION / MARRIAGE / LIMIT_BAL / AGE)
+#   2 = PAY status (PAY_0 .. PAY_6)
+#   3 = BILL_AMT  (BILL_AMT1 .. BILL_AMT6)
+#   4 = PAY_AMT   (PAY_AMT1 .. PAY_AMT6)
+# ──────────────────────────────────────────────────────────────────────────────
+
+FEATURE_GROUP_CLS = 0
+FEATURE_GROUP_DEMOGRAPHIC = 1
+FEATURE_GROUP_PAY = 2
+FEATURE_GROUP_BILL = 3
+FEATURE_GROUP_PAY_AMT = 4
+N_FEATURE_GROUPS = 5
+
+# Human-readable names for each feature group. Used for attention heatmaps,
+# attribution panels and any diagnostic code that prefers "PAY" over "2".
+# Plan §7.1 — report-appendix visualisations consume this mapping directly.
+FEATURE_GROUP_NAMES: Dict[int, str] = {
+    FEATURE_GROUP_CLS:         "CLS",
+    FEATURE_GROUP_DEMOGRAPHIC: "demographic",
+    FEATURE_GROUP_PAY:         "PAY",
+    FEATURE_GROUP_BILL:        "BILL_AMT",
+    FEATURE_GROUP_PAY_AMT:     "PAY_AMT",
+}
+
+_DEMOGRAPHIC_FEATURES = set(CATEGORICAL_FEATURES) | {"LIMIT_BAL", "AGE"}
+_BILL_FEATURES = {f"BILL_AMT{_m}" for _m in range(1, 7)}
+_PAY_AMT_FEATURES = {f"PAY_AMT{_m}" for _m in range(1, 7)}
+
+
+def _group_for_feature(feature_name: str) -> int:
+    if feature_name in _DEMOGRAPHIC_FEATURES:
+        return FEATURE_GROUP_DEMOGRAPHIC
+    if feature_name in PAY_STATUS_FEATURES:
+        return FEATURE_GROUP_PAY
+    if feature_name in _BILL_FEATURES:
+        return FEATURE_GROUP_BILL
+    if feature_name in _PAY_AMT_FEATURES:
+        return FEATURE_GROUP_PAY_AMT
+    raise KeyError(f"No group defined for feature {feature_name!r}")
+
+
+def build_group_assignment(cls_offset: int = 1) -> List[int]:
+    """
+    Build the drift-safe group-index list consumed by
+    :class:`transformer.FeatureGroupBias` (Novelty N2 / Ablation A21).
+
+    Length is ``len(TOKEN_ORDER) + cls_offset`` — 24 by default (one [CLS]
+    prepended). Each entry is an integer in ``[0, N_FEATURE_GROUPS)``:
+
+        0  [CLS]
+        1  demographic  (SEX / EDUCATION / MARRIAGE / LIMIT_BAL / AGE)
+        2  PAY status   (PAY_0 .. PAY_6)
+        3  BILL_AMT     (BILL_AMT1 .. BILL_AMT6)
+        4  PAY_AMT      (PAY_AMT1 .. PAY_AMT6)
+
+    Derived from :data:`TOKEN_ORDER` so the assignment cannot silently drift
+    if a future refactor reorders the canonical feature list.
+
+    Parameters
+    ----------
+    cls_offset
+        Number of CLS-style tokens prepended ahead of the 23 feature tokens.
+        Default 1 — matches the 24-slot output of :class:`FeatureEmbedding`.
+        Pass ``0`` to get assignments for the pre-CLS 23-block.
+    """
+    assignment: List[int] = [FEATURE_GROUP_CLS] * cls_offset
+    assignment.extend(_group_for_feature(f) for f in TOKEN_ORDER)
+    return assignment
+
+
+def describe_token_layout(cls_offset: int = 1) -> str:
+    """
+    Return a human-readable multi-line summary of the token layout.
+
+    Useful for notebook pretty-printing, report appendices, and quick
+    sanity checks when debugging position-indexed biases (Novelties N2/N3)
+    or MTLM mask placement (Novelty N4). Each line describes one position
+    in the ``(cls_offset + len(TOKEN_ORDER))``-token output sequence:
+
+        position  group_name       feature_name   month
+        --------  ---------------  -------------  -----
+              0   CLS              [CLS]          N/A
+              1   demographic      SEX            N/A
+              2   demographic      EDUCATION      N/A
+              ...
+              4   PAY              PAY_0          0
+              ...
+             12   BILL_AMT         BILL_AMT1      0
+              ...
+
+    ``month`` is ``"N/A"`` for non-temporal tokens. The layout is derived
+    from the canonical :data:`TOKEN_ORDER`, so the output cannot silently
+    desynchronise from the live embedding layer.
+
+    Parameters
+    ----------
+    cls_offset
+        Number of CLS-style tokens prepended. Default ``1`` — matches the
+        24-token output sequence of :class:`FeatureEmbedding`.
+    """
+    lines: List[str] = []
+    header = f"{'pos':>4}  {'group':<13}  {'feature':<13}  {'month':>5}"
+    sep = "-" * len(header)
+    lines.append(header)
+    lines.append(sep)
+
+    for cls_i in range(cls_offset):
+        lines.append(
+            f"{cls_i:>4}  {FEATURE_GROUP_NAMES[FEATURE_GROUP_CLS]:<13}  "
+            f"{'[CLS]':<13}  {'N/A':>5}"
+        )
+
+    for local_i, feat in enumerate(TOKEN_ORDER):
+        pos = cls_offset + local_i
+        group_id = _group_for_feature(feat)
+        group_name = FEATURE_GROUP_NAMES[group_id]
+        month = _TEMPORAL_MONTH.get(feat)
+        month_str = "N/A" if month is None else str(month)
+        lines.append(f"{pos:>4}  {group_name:<13}  {feat:<13}  {month_str:>5}")
+
+    return "\n".join(lines)
+
+
 def build_temporal_layout(
     cls_offset: int = 1,
 ) -> Dict[str, Dict[str, List[int]]]:
@@ -410,6 +537,151 @@ class FeatureEmbedding(nn.Module):
         out = torch.cat([cls, feature_tokens], dim=1)                                    # (B, 24, d)
         return self.dropout(self.norm(out))
 
+    # ----------------------------------------------------- fine-tuning helpers
+
+    def freeze_encoder(self, freeze: bool = True) -> None:
+        """
+        Freeze (or unfreeze) every encoder-side parameter of this module.
+
+        "Encoder-side" means everything *except* a downstream classification
+        head — for :class:`FeatureEmbedding` the model *is* the encoder, so
+        this toggles :attr:`requires_grad` on every owned parameter:
+
+            * ``cat_embeddings.*``
+            * ``pay_state_embedding``, ``pay_severity_proj``
+            * ``num_feature_embedding``, ``value_proj``
+            * ``pos_embedding``, ``temporal_pos_embedding`` (if present)
+            * ``mask_token`` (if present), ``cls_token``
+            * ``norm`` (LayerNorm weights)
+
+        Intended for the two-stage fine-tuning workflow in Plan §8.5.5:
+        after loading an MTLM-pretrained checkpoint, a caller may want to
+        freeze the encoder for the first few epochs of supervised training
+        so the classification head can settle before the encoder weights
+        move. Subsequently calling ``freeze_encoder(False)`` re-enables
+        gradient flow for the joint-finetuning phase.
+
+        Parameters
+        ----------
+        freeze
+            If True (default), all parameters have ``requires_grad=False``.
+            If False, they are re-enabled.
+        """
+        for param in self.parameters():
+            param.requires_grad = not freeze
+
+    def init_from_pretrained_statedict(
+        self,
+        state_dict: Dict[str, torch.Tensor],
+        strict: bool = False,
+    ) -> Dict[str, List[str]]:
+        """
+        Load embedding-relevant tensors from a larger (e.g. full-transformer
+        or MTLM) checkpoint state_dict.
+
+        Only keys that correspond to owned parameters/buffers are consulted;
+        any additional keys (transformer blocks, classifier heads, optimiser
+        state, etc.) are silently filtered out. This makes the helper robust
+        to checkpoints produced by arbitrary wrapper models — the caller does
+        not need to strip prefixes or hand-curate the subset.
+
+        Keys considered (prefix-matched against owned state-dict entries):
+
+            * ``cat_embeddings.*``
+            * ``pay_state_embedding.*``, ``pay_severity_proj.*``
+            * ``num_feature_embedding.*``, ``value_proj.*``
+            * ``pos_embedding.*``, ``temporal_pos_embedding.*``
+            * ``mask_token``, ``cls_token``
+            * ``norm.*``
+
+        Also tolerates state dicts saved under a common wrapper prefix such
+        as ``"embedding."`` (from ``TabularTransformer.embedding``) or
+        ``"feature_embedding."``: a key like ``"embedding.cls_token"`` is
+        normalised to ``"cls_token"`` before matching.
+
+        Parameters
+        ----------
+        state_dict
+            Full or partial state dict — any key whose tail matches one of
+            our own parameter names (after prefix stripping) is loaded.
+        strict
+            If True, raise :class:`KeyError` when any of this module's
+            parameters has no corresponding tensor in ``state_dict`` (after
+            prefix stripping). If False (default), missing keys are
+            collected into the report and loading proceeds for the rest.
+            Shape mismatches on matched keys always raise, regardless.
+
+        Returns
+        -------
+        dict
+            Small diagnostic report::
+
+                {
+                    "loaded":   list[str],   # parameter names we populated
+                    "missing":  list[str],   # owned names with no match
+                    "unexpected": list[str], # state_dict keys we ignored
+                }
+
+            Useful for unit tests and logging during MTLM → finetune
+            handovers (Plan §8.5.5).
+        """
+        own_keys = set(self.state_dict().keys())
+
+        # Candidate prefix strips — try in order, pick the first whose
+        # stripped remainder is one of our owned keys. "" must come first so
+        # checkpoints saved directly from a FeatureEmbedding skip the
+        # prefix-hunt entirely.
+        candidate_prefixes = ("", "embedding.", "feature_embedding.", "module.")
+
+        # Map ``owned-name → tensor`` for every incoming key that resolves
+        # cleanly to one of our parameters. Duplicate owned names (same key
+        # appearing under multiple prefixes) keep the first hit.
+        normalised: Dict[str, torch.Tensor] = {}
+        unexpected: List[str] = []
+        for raw_key, tensor in state_dict.items():
+            matched_own: Optional[str] = None
+            for prefix in candidate_prefixes:
+                if prefix and not raw_key.startswith(prefix):
+                    continue
+                stripped = raw_key[len(prefix):] if prefix else raw_key
+                if stripped in own_keys:
+                    matched_own = stripped
+                    break
+            if matched_own is None:
+                unexpected.append(raw_key)
+                continue
+            if matched_own not in normalised:
+                normalised[matched_own] = tensor
+
+        # Load what we have; shape mismatches raise with a clear message.
+        loaded: List[str] = []
+        for key, tensor in normalised.items():
+            own = self.state_dict()[key]
+            if own.shape != tensor.shape:
+                raise ValueError(
+                    f"init_from_pretrained_statedict: shape mismatch for "
+                    f"{key!r} (own {tuple(own.shape)} vs incoming "
+                    f"{tuple(tensor.shape)})"
+                )
+            # Use load_state_dict with a single-key dict so nn.Module's
+            # native type-coercion / device-placement logic runs (no manual
+            # .data.copy_).
+            self.load_state_dict({key: tensor}, strict=False)
+            loaded.append(key)
+
+        missing = sorted(own_keys - set(loaded))
+        if strict and missing:
+            raise KeyError(
+                f"init_from_pretrained_statedict(strict=True): missing keys "
+                f"{missing}"
+            )
+
+        return {
+            "loaded":     sorted(loaded),
+            "missing":    missing,
+            "unexpected": sorted(unexpected),
+        }
+
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Smoke test
@@ -565,5 +837,84 @@ if __name__ == "__main__":
     out_d2 = model_d2(batch)
     assert torch.allclose(out_d1, out_d2, atol=1e-6), "re-seeded re-run not deterministic"
     print("\n  deterministic under identical seed ✓")
+
+    # ── E: freeze_encoder ──
+    print("\n── E: freeze_encoder / unfreeze ──")
+    model_e = FeatureEmbedding(d_model=32, dropout=0.0, use_mask_token=True)
+    model_e.freeze_encoder(True)
+    assert all(not p.requires_grad for p in model_e.parameters()), "freeze leaked"
+    print(f"  all {sum(1 for _ in model_e.parameters())} params frozen ✓")
+    model_e.freeze_encoder(False)
+    assert all(p.requires_grad for p in model_e.parameters()), "unfreeze leaked"
+    print("  unfreeze restores requires_grad=True on every param ✓")
+
+    # ── F: init_from_pretrained_statedict ──
+    print("\n── F: init_from_pretrained_statedict ──")
+    src_model = FeatureEmbedding(d_model=32, dropout=0.0, use_mask_token=True)
+    # Build a "wrapper" state dict mimicking the shape of a full transformer
+    # checkpoint: embedding keys under "embedding." prefix + some spurious
+    # transformer-block keys that must be filtered out.
+    wrapper_sd = {
+        f"embedding.{k}": v.clone() for k, v in src_model.state_dict().items()
+    }
+    wrapper_sd["classifier.weight"] = torch.randn(1, 32)
+    wrapper_sd["transformer_block_0.attn.weight"] = torch.randn(32, 32)
+
+    dst_model = FeatureEmbedding(d_model=32, dropout=0.0, use_mask_token=True)
+    report = dst_model.init_from_pretrained_statedict(wrapper_sd, strict=False)
+    # Every owned key should have been loaded.
+    assert not report["missing"], f"missing after wrapper load: {report['missing']}"
+    # The two spurious keys should appear in "unexpected".
+    assert "classifier.weight" in report["unexpected"]
+    assert "transformer_block_0.attn.weight" in report["unexpected"]
+    # Loaded tensors must match source.
+    for key in report["loaded"]:
+        assert torch.equal(dst_model.state_dict()[key], src_model.state_dict()[key]), (
+            f"{key} not correctly copied"
+        )
+    print(
+        f"  loaded={len(report['loaded'])}  unexpected={len(report['unexpected'])}  "
+        f"missing={len(report['missing'])} ✓"
+    )
+
+    # Strict mode raises on missing keys.
+    partial_sd = {"cls_token": src_model.cls_token.data.clone()}
+    try:
+        FeatureEmbedding(d_model=32, use_mask_token=True).init_from_pretrained_statedict(
+            partial_sd, strict=True
+        )
+    except KeyError as e:
+        print(f"  strict=True raises on partial dict: {str(e)[:60]}... ✓")
+    else:
+        raise AssertionError("strict=True should have raised on missing keys")
+
+    # Shape mismatch raises clearly.
+    bad_sd = {"cls_token": torch.randn(1, 1, 64)}  # wrong d_model
+    try:
+        FeatureEmbedding(d_model=32).init_from_pretrained_statedict(bad_sd)
+    except ValueError as e:
+        print(f"  shape mismatch raises: {str(e)[:60]}... ✓")
+    else:
+        raise AssertionError("shape mismatch should have raised")
+
+    # ── G: describe_token_layout ──
+    print("\n── G: describe_token_layout ──")
+    layout_str = describe_token_layout()
+    # Basic sanity: one header + one separator + 24 rows = 26 lines.
+    assert layout_str.count("\n") >= 25, "layout should have at least 26 lines"
+    assert "CLS" in layout_str and "PAY_0" in layout_str and "BILL_AMT1" in layout_str
+    # First three rows of body are demographic non-temporal.
+    assert "demographic" in layout_str
+    assert "N/A" in layout_str  # non-temporal tokens
+    # Also verify cls_offset=0 gives a 23-row body.
+    short = describe_token_layout(cls_offset=0)
+    assert short.count("\n") >= 24, "cls_offset=0 layout should have at least 25 lines"
+    print(f"  {layout_str.count(chr(10)) + 1} lines, cls_offset=0 variant also valid ✓")
+
+    # ── H: FEATURE_GROUP_NAMES ──
+    assert FEATURE_GROUP_NAMES[FEATURE_GROUP_CLS] == "CLS"
+    assert FEATURE_GROUP_NAMES[FEATURE_GROUP_PAY] == "PAY"
+    assert len(FEATURE_GROUP_NAMES) == N_FEATURE_GROUPS
+    print("  FEATURE_GROUP_NAMES consistent with group constants ✓")
 
     print("\nAll embedding smoke tests passed.")

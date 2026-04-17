@@ -24,7 +24,9 @@ from __future__ import annotations
 import pytest
 import torch
 
+from embedding import N_FEATURE_GROUPS, build_group_assignment  # noqa: E402
 from transformer import (  # noqa: E402
+    FeatureGroupBias,
     FeedForward,
     TemporalDecayBias,
     TransformerBlock,
@@ -411,3 +413,284 @@ def test_encoder_integrates_with_feature_embedding(canonical_layout):
     for name, p in enc.named_parameters():
         assert p.grad is not None, f"no grad on {name}"
         assert torch.isfinite(p.grad).all()
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# FeatureGroupBias — Novelty N2
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+@pytest.fixture()
+def canonical_group_assignment():
+    """The canonical 24-slot group assignment derived from TOKEN_ORDER:
+    [CLS] at 0, demographic (SEX/EDU/MAR/LIMIT_BAL/AGE), PAY, BILL_AMT, PAY_AMT."""
+    return build_group_assignment(cls_offset=1)
+
+
+def test_feature_group_bias_scalar_output_shape(canonical_group_assignment):
+    fgb = FeatureGroupBias(
+        group_assignment=canonical_group_assignment,
+        n_groups=N_FEATURE_GROUPS,
+        mode="scalar",
+    )
+    bias = fgb()
+    assert bias is not None
+    assert bias.shape == (24, 24)
+
+
+def test_feature_group_bias_per_head_output_shape(canonical_group_assignment):
+    fgb = FeatureGroupBias(
+        group_assignment=canonical_group_assignment,
+        n_groups=N_FEATURE_GROUPS,
+        mode="per_head",
+        n_heads=4,
+    )
+    bias = fgb()
+    assert bias is not None
+    assert bias.shape == (4, 24, 24)
+
+
+def test_feature_group_bias_off_returns_none(canonical_group_assignment):
+    fgb = FeatureGroupBias(
+        group_assignment=canonical_group_assignment,
+        n_groups=N_FEATURE_GROUPS,
+        mode="off",
+    )
+    assert fgb() is None
+    # The learnable parameter must also be absent — nothing to train in "off" mode.
+    assert fgb.bias_matrix is None
+
+
+def test_feature_group_bias_zero_initialised(canonical_group_assignment):
+    """Zero-initialisation is the whole point of the default-safe contract:
+    if the prior is unhelpful, the model leaves B ≈ 0 and recovers a plain
+    encoder. Verify the bias_matrix tensor itself is zero (not just the
+    forward output, which would also be zero if fancy-indexing silently
+    returned a constant)."""
+    fgb_scalar = FeatureGroupBias(
+        group_assignment=canonical_group_assignment,
+        n_groups=N_FEATURE_GROUPS,
+        mode="scalar",
+    )
+    assert fgb_scalar.bias_matrix is not None
+    assert fgb_scalar.bias_matrix.shape == (N_FEATURE_GROUPS, N_FEATURE_GROUPS)
+    assert torch.equal(
+        fgb_scalar.bias_matrix,
+        torch.zeros(N_FEATURE_GROUPS, N_FEATURE_GROUPS),
+    )
+    # And the forward output is therefore also zero everywhere.
+    assert torch.equal(fgb_scalar(), torch.zeros(24, 24))
+
+    fgb_ph = FeatureGroupBias(
+        group_assignment=canonical_group_assignment,
+        n_groups=N_FEATURE_GROUPS,
+        mode="per_head",
+        n_heads=4,
+    )
+    assert fgb_ph.bias_matrix is not None
+    assert fgb_ph.bias_matrix.shape == (4, N_FEATURE_GROUPS, N_FEATURE_GROUPS)
+    assert torch.equal(
+        fgb_ph.bias_matrix,
+        torch.zeros(4, N_FEATURE_GROUPS, N_FEATURE_GROUPS),
+    )
+
+
+def test_feature_group_bias_rejects_unknown_mode(canonical_group_assignment):
+    with pytest.raises(ValueError, match="Unknown mode"):
+        FeatureGroupBias(
+            group_assignment=canonical_group_assignment,
+            n_groups=N_FEATURE_GROUPS,
+            mode="not_a_mode",  # type: ignore[arg-type]
+        )
+
+
+def test_feature_group_bias_rejects_out_of_range_assignments():
+    """A group index ≥ n_groups would silently corrupt the fancy-indexing
+    lookup — the constructor must reject it up-front."""
+    with pytest.raises(ValueError, match=r"group_assignment"):
+        FeatureGroupBias(
+            group_assignment=[0, 1, 2, 3, 5],  # 5 is out of range for n_groups=5
+            n_groups=5,
+            mode="scalar",
+        )
+    # Negative indices are equally invalid.
+    with pytest.raises(ValueError, match=r"group_assignment"):
+        FeatureGroupBias(
+            group_assignment=[0, 1, -1, 2, 3],
+            n_groups=5,
+            mode="scalar",
+        )
+
+
+def test_feature_group_bias_index_lookup_correctness():
+    """Set B[group_X, group_Y] = 42.0; every (i, j) cell where token i
+    belongs to group_X AND token j belongs to group_Y must equal 42.0 in
+    the forward output. Cells in other group-pairs stay at zero."""
+    # Simple fabricated layout: 6 tokens, 3 groups of 2 each.
+    assignment = [0, 0, 1, 1, 2, 2]
+    fgb = FeatureGroupBias(
+        group_assignment=assignment,
+        n_groups=3,
+        mode="scalar",
+    )
+    with torch.no_grad():
+        fgb.bias_matrix.zero_()
+        fgb.bias_matrix[1, 2] = 42.0
+
+    bias = fgb()
+    assert bias.shape == (6, 6)
+    # Positions 2-3 are group 1; positions 4-5 are group 2 — those cells must be 42.
+    for i in (2, 3):
+        for j in (4, 5):
+            assert bias[i, j].item() == 42.0, (i, j)
+    # Every other cell must remain 0.
+    mask_nonzero = torch.zeros(6, 6, dtype=torch.bool)
+    for i in (2, 3):
+        for j in (4, 5):
+            mask_nonzero[i, j] = True
+    assert torch.all(bias[~mask_nonzero] == 0.0)
+
+
+def test_feature_group_bias_per_head_different_heads():
+    """Per-head mode must give each head its own independent bias matrix.
+    Setting B[0, 0, 1] ≠ B[1, 1, 0] should yield different bias tensors at
+    the two heads' respective target cells."""
+    assignment = [0, 0, 1, 1, 2, 2]
+    fgb = FeatureGroupBias(
+        group_assignment=assignment,
+        n_groups=3,
+        mode="per_head",
+        n_heads=2,
+    )
+    with torch.no_grad():
+        fgb.bias_matrix.zero_()
+        # Head 0: put 7.0 on the (group 0, group 1) cell.
+        fgb.bias_matrix[0, 0, 1] = 7.0
+        # Head 1: put -3.0 on the (group 1, group 0) cell.
+        fgb.bias_matrix[1, 1, 0] = -3.0
+
+    bias = fgb()
+    assert bias.shape == (2, 6, 6)
+    # Head 0's (0, 0, 1) entry lights up rows 0-1 × cols 2-3.
+    for i in (0, 1):
+        for j in (2, 3):
+            assert bias[0, i, j].item() == 7.0, ("head0", i, j)
+            assert bias[1, i, j].item() == 0.0, ("head1 should be zero", i, j)
+    # Head 1's (1, 1, 0) entry lights up rows 2-3 × cols 0-1.
+    for i in (2, 3):
+        for j in (0, 1):
+            assert bias[1, i, j].item() == -3.0, ("head1", i, j)
+            assert bias[0, i, j].item() == 0.0, ("head0 should be zero", i, j)
+
+
+def test_feature_group_bias_gradient_flows_to_matrix(canonical_group_assignment):
+    """Backprop through the composed bias must land a finite non-zero gradient
+    on the B parameter — otherwise the prior cannot be activated or tuned
+    during training."""
+    torch.manual_seed(0)
+    fgb = FeatureGroupBias(
+        group_assignment=canonical_group_assignment,
+        n_groups=N_FEATURE_GROUPS,
+        mode="scalar",
+    )
+    with torch.no_grad():
+        fgb.bias_matrix.fill_(0.2)
+
+    enc = TransformerEncoder(
+        d_model=32, n_heads=4, n_layers=2, dropout=0.0, feature_group_bias=fgb,
+    )
+    enc.train()
+    x = torch.randn(4, 24, 32)
+    enc(x)[0].sum().backward()
+    assert fgb.bias_matrix.grad is not None
+    assert torch.isfinite(fgb.bias_matrix.grad).all()
+    assert fgb.bias_matrix.grad.abs().sum().item() > 0
+
+
+def test_encoder_composes_temporal_decay_and_feature_group_bias(
+    canonical_layout, canonical_group_assignment,
+):
+    """When both novelty biases are present, the encoder's composed
+    attn_bias must equal the sum of the two individual outputs.
+
+    Verified indirectly: with *both* modules at their zero-init value the
+    attention weights match a plain encoder seeded identically; activating
+    either module (α>0 or B≠0) must change the weights in the expected
+    direction.
+    """
+    torch.manual_seed(0)
+    x = torch.randn(2, 24, 32)
+
+    # Reference run: plain encoder (no biases), eval mode for determinism.
+    torch.manual_seed(42)
+    enc_plain = TransformerEncoder(
+        d_model=32, n_heads=4, n_layers=2, dropout=0.0,
+    )
+    enc_plain.eval()
+    _, weights_plain = enc_plain(x)
+
+    # Composed run: same seed, both biases present but zero-initialised —
+    # the composed bias is exactly zero, so the attention weights must match
+    # the plain encoder bit-for-bit.
+    torch.manual_seed(42)
+    decay = TemporalDecayBias(canonical_layout, seq_len=24, mode="scalar")
+    fgb = FeatureGroupBias(
+        group_assignment=canonical_group_assignment,
+        n_groups=N_FEATURE_GROUPS,
+        mode="scalar",
+    )
+    enc_both = TransformerEncoder(
+        d_model=32, n_heads=4, n_layers=2, dropout=0.0,
+        temporal_decay=decay, feature_group_bias=fgb,
+    )
+    enc_both.eval()
+    _, weights_both_zero = enc_both(x)
+    for w_plain, w_zero in zip(weights_plain, weights_both_zero):
+        assert torch.allclose(w_plain, w_zero, atol=1e-6), (
+            "zero-initialised biases must leave attention unchanged vs plain encoder"
+        )
+
+    # The composed-bias tensor should equal the elementwise sum of each
+    # module's own forward output. Check this directly on the encoder's
+    # _compose_attn_bias() helper with non-zero values.
+    with torch.no_grad():
+        decay.alpha.fill_(0.3)
+        fgb.bias_matrix.fill_(0.5)
+    expected = decay() + fgb()
+    composed = enc_both._compose_attn_bias()
+    assert composed is not None
+    assert torch.allclose(composed, expected, atol=1e-6)
+
+    # Activating the biases must also change the attention weights vs the
+    # all-zero baseline — proof that the composed bias is actually threaded
+    # into the attention scores.
+    _, weights_both_active = enc_both(x)
+    total_diff = sum(
+        (wa - wz).abs().sum().item()
+        for wa, wz in zip(weights_both_active, weights_both_zero)
+    )
+    assert total_diff > 1e-3, (
+        "activating α and B should measurably shift the attention weights"
+    )
+
+
+def test_encoder_no_bias_when_both_none():
+    """The plain-encoder path (no temporal_decay, no feature_group_bias) must
+    preserve pre-N2/N3 behaviour: output shape intact and attention rows
+    sum to 1 within tolerance."""
+    enc = TransformerEncoder(
+        d_model=32, n_heads=4, n_layers=2, dropout=0.0,
+        temporal_decay=None, feature_group_bias=None,
+    )
+    enc.eval()
+    x = torch.randn(4, 24, 32)
+    out, weights = enc(x)
+    assert out.shape == (4, 24, 32)
+    assert len(weights) == 2
+    # The composed bias must be None when neither module is provided — this
+    # is what lets the plain-encoder path stay at O(1) tensor ops per forward.
+    assert enc._compose_attn_bias() is None
+    for w in weights:
+        assert w.shape == (4, 4, 24, 24)
+        row_sums = w.sum(dim=-1)
+        assert torch.allclose(row_sums, torch.ones_like(row_sums), atol=1e-5)
