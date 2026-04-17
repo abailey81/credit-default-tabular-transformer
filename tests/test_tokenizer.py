@@ -192,3 +192,67 @@ def test_mtlm_collator_rejects_bad_probs():
         MTLMCollator(mask_prob=1.0)
     with pytest.raises(ValueError):
         MTLMCollator(replace_with_mask=0.7, replace_with_random=0.5)  # sum > 1
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# pay_raw — raw PAY values shifted into [0, 10], for MTLM / N5 multi-task heads
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+def test_pay_raw_present_and_shifted_into_zero_ten(train_df_small, cat_vocab):
+    """pay_raw must be present in the dataset item dict, shape (6,), int64,
+    with values in [0, 10] corresponding to raw PAY values in [-2, 8]."""
+    ds = CreditDefaultDataset(train_df_small, cat_vocab, verbose=False)
+    item = ds[0]
+    assert "pay_raw" in item, "pay_raw missing from __getitem__ output"
+    assert item["pay_raw"].dtype == torch.int64
+    assert item["pay_raw"].shape == (6,)
+    assert int(item["pay_raw"].min()) >= 0
+    assert int(item["pay_raw"].max()) <= 10
+
+
+def test_pay_raw_matches_raw_dataframe_values(train_df_small, cat_vocab):
+    """pay_raw_shifted - 2 should equal the original PAY values in the frame."""
+    ds = CreditDefaultDataset(train_df_small, cat_vocab, verbose=False)
+    expected = train_df_small[PAY_STATUS_FEATURES].to_numpy(dtype=np.int64)
+    # ds.tensors is an escape hatch exposing the full (N, 6) tensor.
+    observed = ds.tensors["pay_raw"].numpy() - 2  # undo the +2 shift
+    assert np.array_equal(observed, expected)
+
+
+def test_pay_raw_consistent_with_hybrid_state_severity(train_df_small, cat_vocab):
+    """A row's pay_raw must be recoverable from its (state_id, severity)
+    pair — this is the invariant the N5 aux head relies on."""
+    ds = CreditDefaultDataset(train_df_small, cat_vocab, verbose=False)
+    state = ds.tensors["pay_state_ids"]            # (N, 6) int64
+    sev = ds.tensors["pay_severities"]             # (N, 6) float32
+    raw_shifted = ds.tensors["pay_raw"]            # (N, 6) int64 in [0, 10]
+    raw = raw_shifted - 2                          # original [-2, 8]
+    # Reconstruct from (state, severity).
+    reconstructed = torch.zeros_like(raw)
+    reconstructed[state == PAY_STATE_NO_BILL] = -2
+    reconstructed[state == PAY_STATE_PAID_FULL] = -1
+    reconstructed[state == PAY_STATE_MINIMUM] = 0
+    delinquent = state == PAY_STATE_DELINQUENT
+    reconstructed[delinquent] = (sev[delinquent] * MAX_PAY_DELAY).round().long()
+    assert torch.equal(reconstructed, raw), (
+        "pay_raw is inconsistent with (state, severity) — the N5 aux head "
+        "target would not reflect the primary tokenisation"
+    )
+
+
+def test_pay_raw_flows_through_default_collate(small_dataset):
+    """The DataLoader collate function must stack pay_raw along dim 0."""
+    from dataset import default_collate
+
+    batch = default_collate([small_dataset[i] for i in range(8)])
+    assert "pay_raw" in batch
+    assert batch["pay_raw"].shape == (8, 6)
+    assert batch["pay_raw"].dtype == torch.int64
+
+
+def test_pay_raw_flows_through_mtlm_collator(small_dataset):
+    """The MTLM collator must carry pay_raw through alongside mask_positions."""
+    out = MTLMCollator(mask_prob=0.15, seed=7)([small_dataset[i] for i in range(8)])
+    assert "pay_raw" in out
+    assert out["pay_raw"].shape == (8, 6)

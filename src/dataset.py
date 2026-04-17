@@ -67,6 +67,7 @@ def default_collate(batch: Sequence[Dict[str, Any]]) -> Dict[str, torch.Tensor]:
         "cat_indices":    cat_indices,
         "pay_state_ids":  torch.stack([item["pay_state_ids"] for item in batch]),
         "pay_severities": torch.stack([item["pay_severities"] for item in batch]),
+        "pay_raw":        torch.stack([item["pay_raw"] for item in batch]),
         "num_values":     torch.stack([item["num_values"] for item in batch]),
         "label":          torch.stack([item["label"] for item in batch]),
     }
@@ -336,15 +337,35 @@ def make_loader(
 
 if __name__ == "__main__":
     import json
+    import sys
     from pathlib import Path
+
+    # UTF-8 stdout so box-drawing separators print cleanly on Windows.
+    for _s in (sys.stdout, sys.stderr):
+        if hasattr(_s, "reconfigure"):
+            try:
+                _s.reconfigure(encoding="utf-8", errors="replace")
+            except (AttributeError, ValueError):
+                pass
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s  %(message)s")
 
     # Load real preprocessed data.
     root = Path(__file__).resolve().parent.parent
-    meta = json.loads((root / "data/processed/feature_metadata.json").read_text())
+    meta_path = root / "data/processed/feature_metadata.json"
+    train_csv = root / "data/processed/train_scaled.csv"
+    val_csv = root / "data/processed/val_scaled.csv"
+    if not (meta_path.is_file() and train_csv.is_file() and val_csv.is_file()):
+        print(
+            "[SKIP] dataset.py smoke test requires preprocessing output.\n"
+            "       Run `poetry run python run_pipeline.py --preprocess-only` "
+            "first to materialise data/processed/*.csv."
+        )
+        sys.exit(0)
+
+    meta = json.loads(meta_path.read_text())
     import pandas as pd
-    df_train = pd.read_csv(root / "data/processed/train_scaled.csv")
+    df_train = pd.read_csv(train_csv)
     from tokenizer import build_categorical_vocab
     cat_vocab = build_categorical_vocab(meta)
     ds = CreditDefaultDataset(df_train, cat_vocab, verbose=False)
@@ -372,7 +393,7 @@ if __name__ == "__main__":
 
     # ── 3. Val loader (unshuffled, no drop_last) ──
     print("\n── 3. Val loader ──")
-    df_val = pd.read_csv(root / "data/processed/val_scaled.csv")
+    df_val = pd.read_csv(val_csv)
     ds_val = CreditDefaultDataset(df_val, cat_vocab, verbose=False)
     loader_v = make_loader(ds_val, batch_size=256, mode="val", seed=42)
     total_seen = sum(b["num_values"].shape[0] for b in loader_v)

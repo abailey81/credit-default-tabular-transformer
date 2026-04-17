@@ -203,16 +203,29 @@ class UCIRepoSource(DataSource):
                 "or rely on the local fallback dataset."
             ) from exc
 
-        # Upstream `ucimlrepo.fetch_ucirepo` calls `urllib.request.urlopen`
-        # with no timeout (audited 2026-04-17; see SECURITY_AUDIT.md H-2).
-        # A slow-loris or unresponsive endpoint would hang this process
-        # indefinitely. We wrap the call in a ThreadPoolExecutor and enforce
-        # a hard deadline via Future.result(timeout=...).
+        # Defence in depth for SECURITY_AUDIT H-2:
+        #   (a) socket.setdefaulttimeout — the underlying urllib.request call
+        #       inside ``ucimlrepo`` cannot hang at the TCP level forever.
+        #   (b) ThreadPoolExecutor + Future.result(timeout=…) — enforces a hard
+        #       wall-clock deadline on the overall fetch even if the socket
+        #       layer mishandles the timeout.
+        # Level (a) alone would leak a background thread on timeout; level (b)
+        # alone leaves the background thread blocked in urllib forever after
+        # timeout. Both together guarantee termination and bounded resource use.
+        import socket
         from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeout
 
         last_error: Optional[BaseException] = None
         start = time.perf_counter()
         dataset = None
+
+        def _fetch() -> object:
+            previous_timeout = socket.getdefaulttimeout()
+            socket.setdefaulttimeout(self.request_timeout_seconds)
+            try:
+                return fetch_ucirepo(id=self.dataset_id)
+            finally:
+                socket.setdefaulttimeout(previous_timeout)
 
         for attempt in range(1, self.max_retries + 1):
             try:
@@ -221,7 +234,7 @@ class UCIRepoSource(DataSource):
                     self.dataset_id, attempt, self.max_retries, self.request_timeout_seconds,
                 )
                 with ThreadPoolExecutor(max_workers=1) as pool:
-                    future = pool.submit(fetch_ucirepo, id=self.dataset_id)
+                    future = pool.submit(_fetch)
                     try:
                         dataset = future.result(timeout=self.request_timeout_seconds)
                     except FutureTimeout as exc:

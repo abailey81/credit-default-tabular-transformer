@@ -137,11 +137,28 @@ def test_label_smoothing_eps_zero_equals_wbce():
 
 
 def test_label_smoothing_increases_loss():
-    logits = torch.randn(1024) * 2  # peaky
+    """Label smoothing increases the loss *for a confidently correct model* —
+    the whole point of smoothing is to prevent overconfidence by keeping a
+    small residual mass on the "wrong" answer.
+
+    The earlier formulation of this test (un-seeded random logits + un-seeded
+    random labels) was unreliable: with uncorrelated logits and labels,
+    roughly half of the peaky predictions are confidently *wrong*, and for
+    those the attenuation from (1 − ε/2) actually *lowers* the loss. The net
+    direction depended on whatever global-RNG state the previous test
+    happened to leave — flaky under test-collection order changes.
+
+    Here we construct a well-calibrated peaky model explicitly: logits are
+    large and aligned with the labels, so almost every prediction is
+    confidently correct. In that regime smoothing demonstrably raises the
+    loss, matching the intent of the assertion.
+    """
+    torch.manual_seed(0)
     y = torch.randint(0, 2, (1024,)).float()
+    # Confidently correct peaky model: y=1 → +4 logit, y=0 → −4 logit.
+    logits = (y * 2.0 - 1.0) * 4.0
     lsm_a = LabelSmoothingBCELoss(epsilon=0.0)
     lsm_b = LabelSmoothingBCELoss(epsilon=0.10)
-    # Smoothing increases entropy of the target, so a peaky model pays a higher loss.
     assert lsm_b(logits, y).item() > lsm_a(logits, y).item()
 
 

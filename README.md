@@ -32,7 +32,7 @@ This project develops two models for predicting credit card default on the [UCI 
 
 The dataset contains **6 monthly snapshots** of payment behaviour (April--September 2005) per client. The EDA in this repository reveals clear temporal divergence between defaulters and non-defaulters, motivating a sequence-aware architecture.
 
-> This repository currently contains **Steps 1--2 and 5** (EDA, data preprocessing, and the Random Forest benchmark). The transformer and experiments are implemented in subsequent steps.
+> This repository currently contains **Steps 0--3, Step 4 (partial: encoder landed, full model next), and Step 5**. The training loop, evaluation framework, and experiments are in subsequent PRs.
 
 ### Dataset
 
@@ -55,10 +55,10 @@ The dataset contains **6 monthly snapshots** of payment behaviour (April--Septem
 | **0** | Resilient Data Ingestion | `DONE` | Layered, provenance-aware loader: UCI ML Repository API with bounded retries, automatic fallback to a tracked offline `.xls`, every consumer routes through it. |
 | **1** | Exploratory Data Analysis | `DONE` | 12 figures with statistical tests. Temporal divergence, PAY semantics, feature importance, multicollinearity, outlier and normality diagnostics. |
 | **2** | Data Preprocessing | `DONE` | Schema normalisation, categorical cleaning, 22 engineered features, stratified 70/15/15 split, leak-free scaling, tokeniser metadata export. |
-| **3** | Tabular Tokenisation | `TODO` | Convert each record into an ordered token sequence. Hybrid scheme for categorical, ordinal, and continuous features. |
-| **4** | Transformer (From Scratch) | `TODO` | Embedding, positional encoding, multi-head self-attention, transformer blocks, classification head. Built with PyTorch primitives only. |
+| **3** | Tabular Tokenisation | `DONE` | Hybrid PAY state+severity tokenisation (Novelty N1) in [`src/tokenizer.py`](src/tokenizer.py); feature embedding with [CLS], optional temporal positional encoding, and MTLM `[MASK]` support in [`src/embedding.py`](src/embedding.py). |
+| **4** | Transformer (From Scratch) | `PARTIAL` | Attention ([`src/attention.py`](src/attention.py), PR #7 + `attn_bias` hook PR #8) and PreNorm encoder ([`src/transformer.py`](src/transformer.py), PR #8 — `FeedForward`, `TransformerBlock`, `TemporalDecayBias` Novelty N3, `TransformerEncoder`) landed. Top-level `TabularTransformer` wrapper in [`src/model.py`](src/model.py) and supervised training loop in [`src/train.py`](src/train.py) are next. |
 | **5** | Random Forest Benchmark | `DONE` | Hyperparameter-tuned Random Forest on engineered features. 60-iter RandomizedSearchCV, dual importance, threshold optimisation. |
-| **6** | Experiments & Comparison | `TODO` | Metrics (AUC-ROC, F1, precision-recall), attention visualisation, ablation studies, limitations. |
+| **6** | Experiments & Comparison | `TODO` | Metrics (AUC-ROC, F1, precision-recall), attention visualisation, ablation studies, calibration, statistical significance, limitations. |
 
 <br>
 

@@ -275,7 +275,13 @@ Full summary statistics table exported as CSV and LaTeX, including mean/std/medi
 
 ## 5. Phase 3: Tokenisation & Embedding Design
 
-**Status: [TODO] TODO**
+**Status: [DONE] COMPLETE** — `src/tokenizer.py` (hybrid PAY state+severity
+tokenisation, Novelty N1, plus `MTLMCollator` for Phase 6A); `src/embedding.py`
+(`FeatureEmbedding` with per-feature projections, [CLS] token, optional
+temporal positional encoding for Ablation A7, optional [MASK] token for MTLM
+pretraining — mask content swap preserves both feature positional and temporal
+positional signals). PLE numerical encoding variant (§5.4A) remains TODO for
+Ablation A14.
 
 This is the intellectual heart of the project. The coursework spec says Section 3 (Model Build-up) is worth 40% of marks and must describe tokenisation, embedding design, and justify every choice.
 
@@ -471,7 +477,21 @@ class FeatureTokeniser(nn.Module):
 
 ## 6. Phase 4: Transformer Architecture
 
-**Status: [TODO] TODO**
+**Status: [DONE] COMPLETE** — every sub-item of Plan §6 is implemented.
+Attention (`src/attention.py`, PR #7; extended with the `attn_bias` hook
+in PR #8) + encoder stack (`src/transformer.py`: `FeedForward`,
+`TransformerBlock` with independently-ablatable
+`attn_dropout`/`ffn_dropout`/`residual_dropout`, `TemporalDecayBias` =
+Novelty N3, **`FeatureGroupBias` = Novelty N2** — 5×5 learnable bias
+matrix over the {CLS, demographic, PAY, BILL_AMT, PAY_AMT} groups with
+scalar / per_head / off modes, `TransformerEncoder` composing both
+novelty biases via elementwise sum into a single per-forward
+`attn_bias`) + top-level `TabularTransformer` wrapper (`src/model.py`,
+§6.7 / §6.10 / §6.11) are all landed. Parameter count at plan defaults:
+**28,417** — on target for the ~28K Plan §6.9 budget. Sophisticated
+helpers on `TabularTransformer`: `summary()`, `parameter_count_by_module()`,
+`get_head_params()`, `get_encoder_params()` (for the §8.5.5 two-stage
+optimiser), `load_pretrained_encoder()`.
 
 ### 6.1 Scaled Dot-Product Attention
 
@@ -781,7 +801,12 @@ With probability $p_{\text{drop-block}}$ a whole block's residual sub-layer is s
 
 ## 7. Phase 5: Loss Functions & Class Imbalance
 
-**Status: [TODO] TODO**
+**Status: [DONE] COMPLETE** — `src/losses.py` provides
+`WeightedBCELoss`, `FocalLoss` (γ and α configurable per Ablation A11;
+`"balanced"` α fitted from the first training batch with the conventional
+caveat) and `LabelSmoothingBCELoss` (ε=0.05 default per §7.3). All three
+operate on logits and reduce to `binary_cross_entropy_with_logits` in the
+limit (γ=0, ε=0) — verified by the test suite.
 
 ### 7.1 Weighted Binary Cross-Entropy (Baseline)
 
@@ -823,7 +848,21 @@ src/losses.py           — FocalLoss, WeightedBCE, label smoothing utilities
 
 ## 8. Phase 6: Training Pipeline
 
-**Status: [TODO] TODO**
+**Status: [DONE] COMPLETE** — training infrastructure + supervised loop
+all landed: `src/utils.py` (deterministic seeding per §16.5.1, device
+selection, hardened checkpoint save/load with a weights-only default that
+closes SECURITY_AUDIT C-1, `EarlyStopping`, parameter accounting,
+UTF-8-safe logging), `src/dataset.py` (`StratifiedBatchSampler`,
+`make_loader` with supervised / val / test / MTLM modes, reproducible via
+a seeded generator), and **`src/train.py`** (~550 LOC) implementing the
+full Plan §8 spec: AdamW + linear-warmup-plus-cosine LR schedule + grad
+clipping + per-epoch CSV log + `EarlyStopping` on validation AUC-ROC +
+best-weight restore + hardened checkpoint save. Two-stage LR for MTLM
+fine-tuning (§8.5.5) and multi-task PAY_0 auxiliary objective
+(§8.6 / N5 / A16) are wired through the CLI. Every ablation axis is
+reachable via argparse flags (A2, A3, A4, A5, A7, A10, A11, A12, A16,
+A19, A21, A22). Colab + VS Code Colab extension + local Jupyter all
+drive the loop through `notebooks/04_train_transformer.ipynb`.
 
 ### 8.1 Optimiser: AdamW
 
@@ -934,7 +973,14 @@ src/utils.py            — Seed setting, device handling, checkpointing
 
 ## 8.5 Phase 6A: Self-Supervised Masked Tabular Language Modelling (NOVEL — N4)
 
-**Status: [TODO] TODO**
+**Status: [PARTIAL] IN PROGRESS** — collator (`tokenizer.MTLMCollator`:
+BERT 80/10/10 split, per-row min/max mask bounds, seedable) and the
+model-side `[MASK]` embedding (`embedding.FeatureEmbedding(use_mask_token=True)`;
+mask replacement preserves both feature positional and temporal positional
+signals so masked temporal tokens retain their month index) are landed. Still
+TODO: per-feature prediction heads (`src/mtlm.py`: 3 cat CE heads, 6 PAY CE
+heads, 14 numerical MSE heads), pretraining loop (`src/train_mtlm.py`),
+fine-tuning protocol with two-stage LR.
 
 This is the single most "language-model-like" component of the project. The coursework brief explicitly frames the requirement as a "small transformer-based **language model**" — we take that framing seriously. Large language models (BERT, GPT) owe their generalisation to a self-supervised pretraining stage on unlabeled data before fine-tuning on the downstream task. We adapt this paradigm to structured credit data via **Masked Tabular Language Modelling** (MTLM).
 
@@ -1034,7 +1080,14 @@ with $\lambda \in \{0.1, 0.3, 0.5\}$ ablated.
 
 ## 9. Phase 7: Random Forest Benchmark
 
-**Status: [TODO] TODO**
+**Status: [DONE code / TODO results] IMPLEMENTED, NOT YET EXECUTED** —
+`src/random_forest.py` is 870 LOC covering baseline RF, 60-iter
+`RandomizedSearchCV`, dual feature importance (Gini MDI + permutation),
+5-fold stratified CV, threshold optimisation, and five publication figures.
+Running `poetry run python run_pipeline.py --rf-benchmark --source local`
+produces `results/rf_*.{csv,json}` and `figures/rf_*.png`. Hyperparameter
+grid is a deliberate subset of §9.3 (n_iter=60 vs 200) for time-budget
+reasons; the subset is defensible and can be widened for the final runs.
 
 ### 9.1 Purpose
 
