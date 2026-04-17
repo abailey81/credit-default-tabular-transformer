@@ -1,0 +1,15 @@
+{
+  "split": "train",
+  "threshold": 0.5,
+  "metrics": {
+    "auc_roc": 0.7886076545454632,
+    "auc_pr": 0.5612314399883603,
+    "f1": 0.5391614629794826,
+    "accuracy": 0.754,
+    "precision": 0.4603900060938452,
+    "recall": 0.6504520017219113,
+    "brier": 0.20764808356761932,
+    "ece": 0.2567965393662453
+  },
+  "backfilled_from_checkpoint": true
+}

@@ -42,7 +42,15 @@ Outputs (under ``--output-dir``, defaults to
     config.json            → resolved argparse + runtime metadata + param count
     train_log.csv          → per-epoch train/val metrics, LR, grad norm, wall-clock
     best.pt                → checkpoint bundle (+ .weights + .meta.json sidecars)
-    test_metrics.json      → final metrics at τ=0.5 + threshold sweep
+    train_metrics.json     → final metrics @ τ=0.5 on the training set
+                             (with best-epoch weights restored)
+    train_predictions.npz  → (y_true, y_prob, y_pred) on train — for overfit
+                             diagnostics / train–val–test parity plots
+    val_metrics.json       → final metrics @ τ=0.5 on the validation set
+    val_predictions.npz    → (y_true, y_prob, y_pred) on val — for
+                             val-threshold-picking in Phase 8 evaluate.py
+    test_metrics.json      → final metrics @ τ=0.5 + threshold sweep + epochs
+                             trained + best_epoch + training_seconds
     test_predictions.npz   → (y_true, y_prob, y_pred) for evaluate.py / interpret.py
     test_attn_weights.npz  → per-layer attention on the test set for Phase 10
                              rollout (skip with ``--no-save-attn``)
@@ -796,18 +804,31 @@ def main(argv: Optional[List[str]] = None) -> int:
     log_df.to_csv(output_dir / "train_log.csv", index=False)
     logger.info("Training log → %s", output_dir / "train_log.csv")
 
-    # ── Final test evaluation ─────────────────────────────────────────────
+    # ── Final evaluation on all three splits (with best-epoch weights) ────
+    # An eval-mode loader over the *train* split (no shuffling / stratified
+    # sampling) so the reported train numbers reflect the fitted model's
+    # predictions, not the in-training SGD snapshots.
+    final_train_loader = make_loader(
+        train_ds, batch_size=args.batch_size, mode="val",
+        num_workers=args.num_workers,
+    )
     collect_attn = not (args.no_save_attn or args.smoke_test)
+    train_eval = evaluate_on_loader(model, final_train_loader, device)
+    val_eval = evaluate_on_loader(model, val_loader, device)
     test = evaluate_on_loader(model, test_loader, device, collect_attn=collect_attn)
     test_metrics = test["metrics"]
-    logger.info(
-        "Test metrics @ τ=0.5: AUC-ROC %.4f | AUC-PR %.4f | F1 %.4f | "
-        "ECE %.4f | Brier %.4f",
-        test_metrics["auc_roc"], test_metrics["auc_pr"], test_metrics["f1"],
-        test_metrics["ece"], test_metrics["brier"],
-    )
 
-    # Supplementary threshold sweep — helpful for evaluate.py downstream.
+    for split, ev in (("Train", train_eval), ("Val", val_eval), ("Test", test)):
+        m = ev["metrics"]
+        logger.info(
+            "%-5s metrics @ τ=0.5: AUC-ROC %.4f | AUC-PR %.4f | F1 %.4f | "
+            "acc %.4f | ECE %.4f | Brier %.4f",
+            split, m["auc_roc"], m["auc_pr"], m["f1"],
+            m["accuracy"], m["ece"], m["brier"],
+        )
+
+    # Supplementary threshold sweep (test only) — helpful for downstream
+    # evaluate.py / calibration / stat tests in Phase 8+.
     threshold_sweep = {
         f"tau_{t:.2f}": compute_classification_metrics(
             test["y_true"], test["y_prob"], threshold=t, prefix="",
@@ -815,28 +836,37 @@ def main(argv: Optional[List[str]] = None) -> int:
         for t in (0.10, 0.15, 0.20, 0.25, 0.30, 0.40, 0.50, 0.60)
     }
 
-    test_payload = {
-        "threshold": 0.5,
-        "metrics": test_metrics,
-        "threshold_sweep": threshold_sweep,
-        "epochs_trained": epoch,
-        "best_epoch": early.best_epoch,
-        "best_val_auc_roc": early.best_score,
-        "training_seconds": total_elapsed,
-        "param_count": n_params,
-    }
-    (output_dir / "test_metrics.json").write_text(
-        json.dumps(test_payload, indent=2, default=float)
-    )
-
-    if not args.no_save_predictions:
-        y_pred = (test["y_prob"] >= 0.5).astype(np.int64)
-        np.savez_compressed(
-            output_dir / "test_predictions.npz",
-            y_true=test["y_true"].astype(np.int64),
-            y_prob=test["y_prob"].astype(np.float32),
-            y_pred=y_pred,
+    def _write_split(split: str, ev: Dict[str, Any], *, include_test_extras: bool) -> None:
+        """Persist {split}_metrics.json (+ predictions npz) under output_dir."""
+        payload: Dict[str, Any] = {
+            "split": split,
+            "threshold": 0.5,
+            "metrics": ev["metrics"],
+        }
+        if include_test_extras:
+            payload.update({
+                "threshold_sweep": threshold_sweep,
+                "epochs_trained": epoch,
+                "best_epoch": early.best_epoch,
+                "best_val_auc_roc": early.best_score,
+                "training_seconds": total_elapsed,
+                "param_count": n_params,
+            })
+        (output_dir / f"{split}_metrics.json").write_text(
+            json.dumps(payload, indent=2, default=float)
         )
+        if not args.no_save_predictions:
+            y_pred = (ev["y_prob"] >= 0.5).astype(np.int64)
+            np.savez_compressed(
+                output_dir / f"{split}_predictions.npz",
+                y_true=ev["y_true"].astype(np.int64),
+                y_prob=ev["y_prob"].astype(np.float32),
+                y_pred=y_pred,
+            )
+
+    _write_split("train", train_eval, include_test_extras=False)
+    _write_split("val", val_eval, include_test_extras=False)
+    _write_split("test", test, include_test_extras=True)
 
     if collect_attn and "attn_weights" in test:
         np.savez_compressed(
