@@ -1,51 +1,6 @@
-"""
-significance.py — Phase 12: Statistical-significance testing.
-
-The comparison table in the report will claim things like "the tuned RF
-beats the from-scratch transformer by 0.5 AUC points". Without a
-significance test that claim is unsupported: on a 4,500-row test set the
-sampling variability of AUC is ~0.008, so a 0.005 difference is within
-noise. This module provides the full suite of tests the coursework
-expects:
-
-* **McNemar's test** — paired 2×2 contingency on thresholded predictions.
-  Correct test for "are these two models' error patterns the same?" The
-  exact-binomial variant is used for small discordant counts; chi-squared
-  with continuity correction otherwise.
-* **DeLong's test** — paired AUC-difference test. Operates on the rank
-  statistics of the paired probability vectors. We implement the fast
-  O(N log N) formulation from Sun & Xu (2014).
-* **Paired bootstrap** — nonparametric CI on arbitrary metric
-  differences (AUC-PR, F1, Brier, ECE, …). Resamples the test rows with
-  replacement; reports 2.5/97.5 percentile and two-sided p-value.
-* **Benjamini-Hochberg FDR correction** — controls the false-discovery
-  rate when the same bundle of metrics is tested across multiple model
-  pairs. Necessary when we make a table of p-values and want to claim
-  "X of Y comparisons are significant at FDR 0.05".
-* **Power analysis** — given an observed effect size, the minimum test
-  set N to detect it at α=0.05 / power=0.80. Useful for "is our 4,500-row
-  test set large enough to say anything?"
-
-Public API
-----------
-* ``mcnemar_test(y_true, y_pred_a, y_pred_b)``
-* ``delong_auc_test(y_true, p_a, p_b)``
-* ``paired_bootstrap(y_true, metric_fn, p_a, p_b, n_resamples=2000)``
-* ``bh_fdr(p_values, q=0.05)``
-* ``min_n_for_auc_difference(auc_a, auc_b, prevalence, alpha=0.05, power=0.80)``
-
-All tests return a common ``TestResult`` dataclass.
-
-Outputs
--------
-* ``results/significance/pairwise_tests.csv`` — one row per (model-pair,
-  test, metric) with statistic, p-value, 95% CI, q-value (BH-adjusted).
-* ``figures/significance_pvalue_heatmap.png`` — matrix of (model-A,
-  model-B) AUC-difference p-values.
-
-References: Plan §14 (statistical significance), DeLong et al. (1988),
-Sun & Xu (2014), Benjamini & Hochberg (1995).
-"""
+"""Paired significance tests: McNemar, DeLong (Sun-Xu), paired bootstrap,
+BH-FDR, Hanley-McNeil power. CLI runs every pair, writes pairwise_tests.csv
+and a p-value heatmap."""
 
 from __future__ import annotations
 
@@ -78,10 +33,22 @@ from calibration import expected_calibration_error  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
-
-# ──────────────────────────────────────────────────────────────────────────────
-# Result dataclass
-# ──────────────────────────────────────────────────────────────────────────────
+__all__ = [
+    # Dataclasses
+    "TestResult",
+    # Tests
+    "mcnemar_test",
+    "delong_auc_test",
+    "paired_bootstrap",
+    "bh_fdr",
+    "min_n_for_auc_difference",
+    # Drivers
+    "run_all_pairs",
+    "plot_pvalue_heatmap",
+    "main",
+    # Metric dispatch table
+    "METRIC_FNS",
+]
 
 
 @dataclass
@@ -116,11 +83,6 @@ class TestResult:
         return row
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-# McNemar's test
-# ──────────────────────────────────────────────────────────────────────────────
-
-
 def mcnemar_test(
     y_true: np.ndarray,
     y_pred_a: np.ndarray,
@@ -130,14 +92,7 @@ def mcnemar_test(
     model_b: str = "B",
     exact_threshold: int = 25,
 ) -> TestResult:
-    """Paired McNemar's test on discordant predictions.
-
-    * ``b`` = rows where A is correct and B is wrong.
-    * ``c`` = rows where A is wrong and B is correct.
-
-    Chi-squared with continuity correction used when ``b + c >=
-    exact_threshold``; exact binomial (two-sided) otherwise.
-    """
+    """McNemar on discordant pairs. Exact binomial when b+c < threshold, else χ² w/ continuity."""
     y = y_true.astype(int)
     a = y_pred_a.astype(int)
     bn = y_pred_b.astype(int)
@@ -157,15 +112,13 @@ def mcnemar_test(
         )
 
     if n_discordant < exact_threshold:
-        # Exact binomial — ``b`` ~ Binom(n_discordant, 0.5) under H0.
-        # Two-sided p-value (Fisher's convention).
+        # b ~ Binom(n, 0.5) under H0; two-sided Fisher convention
         k = min(b, c)
         p_val = float(2.0 * stats.binom.cdf(k, n_discordant, 0.5))
         p_val = min(p_val, 1.0)
         stat = float(k)
         method = "exact_binomial"
     else:
-        # Chi-squared with continuity correction.
         stat = (abs(b - c) - 1.0) ** 2 / (b + c)
         p_val = float(1.0 - stats.chi2.cdf(stat, df=1))
         method = "chi2_continuity"
@@ -178,16 +131,8 @@ def mcnemar_test(
     )
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-# DeLong's test — fast O(N log N) formulation
-# ──────────────────────────────────────────────────────────────────────────────
-
-
 def _structural_components(scores: np.ndarray, labels: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
-    """DeLong structural components (V10, V01) via mid-ranks.
-
-    Sun & Xu (2014); same as Pat Fagan's canonical Stata implementation.
-    """
+    """V10, V01 via mid-ranks (Sun-Xu 2014)."""
     pos = labels == 1
     neg = labels == 0
     scores_pos = scores[pos]
@@ -195,19 +140,18 @@ def _structural_components(scores: np.ndarray, labels: np.ndarray) -> Tuple[np.n
     n1 = len(scores_pos)
     n0 = len(scores_neg)
 
-    # Mid-ranks for concatenated [pos, neg].
     combined = np.concatenate([scores_pos, scores_neg])
     order = np.argsort(combined)
     ranks = np.empty_like(order, dtype=np.float64)
 
-    # Average ranks within ties for an unbiased Mann-Whitney U statistic.
+    # avg ranks within ties — keeps MWU unbiased
     sorted_scores = combined[order]
     i = 0
     while i < len(sorted_scores):
         j = i
         while j + 1 < len(sorted_scores) and sorted_scores[j + 1] == sorted_scores[i]:
             j += 1
-        avg_rank = 0.5 * (i + j) + 1.0  # 1-based average
+        avg_rank = 0.5 * (i + j) + 1.0  # 1-based
         ranks[order[i:j + 1]] = avg_rank
         i = j + 1
 
@@ -241,11 +185,7 @@ def delong_auc_test(
     model_a: str = "A",
     model_b: str = "B",
 ) -> TestResult:
-    """DeLong paired test for AUC difference.
-
-    Returns the Z-statistic and two-sided p-value under the asymptotic
-    normal approximation, plus a 95% CI on ``AUC_a − AUC_b``.
-    """
+    """DeLong paired AUC test. Z, two-sided p, 95% CI on A−B."""
     y = y_true.astype(int)
     if len(np.unique(y)) < 2:
         raise ValueError("DeLong requires at least one row of each class.")
@@ -257,7 +197,6 @@ def delong_auc_test(
     auc_b = v10_b.mean()
     effect = float(auc_a - auc_b)
 
-    # Covariance matrix of (auc_a, auc_b).
     def _cov(x, y):
         n = len(x)
         return float(np.sum((x - x.mean()) * (y - y.mean())) / (n - 1))
@@ -275,7 +214,7 @@ def delong_auc_test(
     cov = s10 / n1 + s01 / n0
     var_diff = float(cov[0, 0] + cov[1, 1] - 2 * cov[0, 1])
     if var_diff <= 0:
-        # Degenerate — AUCs are identical by construction.
+        # AUCs identical
         return TestResult(
             test="delong", model_a=model_a, model_b=model_b,
             metric="auc_roc", statistic=0.0, p_value=1.0, effect=effect,
@@ -294,11 +233,6 @@ def delong_auc_test(
     )
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Paired bootstrap for arbitrary metrics
-# ──────────────────────────────────────────────────────────────────────────────
-
-
 def paired_bootstrap(
     y_true: np.ndarray,
     metric_fn: Callable[[np.ndarray, np.ndarray], float],
@@ -312,13 +246,8 @@ def paired_bootstrap(
     model_b: str = "B",
     metric_name: str = "metric",
 ) -> TestResult:
-    """Paired-bootstrap CI on ``metric_fn(y_true, p_a) − metric_fn(y_true, p_b)``.
-
-    Resampling is done *jointly* on the row indices so each bootstrap
-    replicate sees the same rows for both models — this controls for
-    between-row variability and is strictly more powerful than unpaired
-    bootstrap for model comparison.
-    """
+    """Paired bootstrap CI on metric(y, p_a) − metric(y, p_b). Joint index
+    resampling pairs out row variance → tighter than unpaired."""
     rng = np.random.default_rng(seed)
     y = y_true.astype(int)
     N = len(y)
@@ -326,8 +255,8 @@ def paired_bootstrap(
     diffs = np.empty(n_resamples, dtype=np.float64)
     for i in range(n_resamples):
         idx = rng.integers(0, N, size=N)
-        # Skip replicates where one class is absent (metric is undefined).
         if len(np.unique(y[idx])) < 2:
+            # single-class replicate → metric undefined
             diffs[i] = np.nan
             continue
         diffs[i] = (float(metric_fn(y[idx], p_a[idx]))
@@ -335,13 +264,12 @@ def paired_bootstrap(
     valid = diffs[np.isfinite(diffs)]
     if len(valid) < 0.9 * n_resamples:
         logger.warning(
-            "%d/%d bootstrap resamples had a degenerate class distribution — "
+            "%d/%d bootstrap resamples had a degenerate class distribution; "
             "CI may be narrow. Consider stratified resampling.",
             n_resamples - len(valid), n_resamples,
         )
     ci_low = float(np.quantile(valid, alpha / 2))
     ci_high = float(np.quantile(valid, 1.0 - alpha / 2))
-    # Two-sided p-value: 2 × min(P(diff ≤ 0), P(diff ≥ 0)).
     p_val = 2.0 * min(float((valid <= 0).mean()),
                       float((valid >= 0).mean()))
     p_val = min(p_val, 1.0)
@@ -353,17 +281,8 @@ def paired_bootstrap(
     )
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Multiple-testing correction
-# ──────────────────────────────────────────────────────────────────────────────
-
-
 def bh_fdr(p_values: Sequence[float], q: float = 0.05) -> Dict[str, np.ndarray]:
-    """Benjamini-Hochberg step-up FDR control.
-
-    Returns arrays ``q_values`` (BH-adjusted p-values) and ``rejected``
-    (boolean mask at level ``q``).
-    """
+    """BH step-up FDR. Returns q-values and reject mask at level q."""
     p = np.asarray(p_values, dtype=np.float64)
     n = len(p)
     if n == 0:
@@ -372,7 +291,7 @@ def bh_fdr(p_values: Sequence[float], q: float = 0.05) -> Dict[str, np.ndarray]:
     ranks = np.empty(n, dtype=int)
     ranks[order] = np.arange(1, n + 1)
     q_adjusted = p * n / ranks
-    # Enforce monotonicity — walking from largest p downward.
+    # monotone adjust: walk down from largest p
     q_sorted = np.minimum.accumulate(q_adjusted[order[::-1]])
     q_final = np.empty(n, dtype=np.float64)
     q_final[order[::-1]] = np.clip(q_sorted, 0.0, 1.0)
@@ -380,18 +299,11 @@ def bh_fdr(p_values: Sequence[float], q: float = 0.05) -> Dict[str, np.ndarray]:
     return {"q_values": q_final, "rejected": rejected}
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Power analysis — minimum sample size to detect a given AUC gap
-# ──────────────────────────────────────────────────────────────────────────────
-
-
 def min_n_for_auc_difference(
     auc_a: float, auc_b: float, prevalence: float,
     *, alpha: float = 0.05, power: float = 0.80,
 ) -> int:
-    """Closed-form Hanley-McNeil approximation for the minimum total sample
-    size needed to detect a ``|AUC_a − AUC_b|`` difference at significance
-    ``alpha`` and power ``power``. Assumes paired labels (Rosner 2011)."""
+    """Hanley-McNeil N to detect |auc_a − auc_b| at given α, power."""
     if auc_a == auc_b:
         return int(1e9)
     z_a = stats.norm.ppf(1.0 - alpha / 2)
@@ -402,18 +314,13 @@ def min_n_for_auc_difference(
         Q2 = (2 * auc ** 2) / (1 + auc)
         return auc * (1 - auc) + (prevalence - 1) * (Q1 - auc ** 2) + (-prevalence) * (Q2 - auc ** 2)
 
-    var = 0.5 * (_var(auc_a) + _var(auc_b))  # conservative
+    var = 0.5 * (_var(auc_a) + _var(auc_b))  # conservative avg
     delta = abs(auc_a - auc_b)
     n1_over_n = prevalence * (1 - prevalence)
     if n1_over_n <= 0:
         return int(1e9)
     n = ((z_a + z_b) ** 2 * var) / (delta ** 2 * n1_over_n)
     return int(math.ceil(n))
-
-
-# ──────────────────────────────────────────────────────────────────────────────
-# CLI pipeline: run every test on every pair
-# ──────────────────────────────────────────────────────────────────────────────
 
 
 def _load_run(run_dir: Path) -> Optional[Dict[str, np.ndarray]]:
@@ -452,17 +359,14 @@ def run_all_pairs(
                 raise ValueError(
                     f"y_true mismatch between {ra['run_name']} and {rb['run_name']}."
                 )
-            # McNemar at τ=0.5
             results.append(mcnemar_test(
                 y, ra["y_pred"], rb["y_pred"],
                 model_a=ra["run_name"], model_b=rb["run_name"],
             ))
-            # DeLong on AUC
             results.append(delong_auc_test(
                 y, ra["y_prob"], rb["y_prob"],
                 model_a=ra["run_name"], model_b=rb["run_name"],
             ))
-            # Paired bootstrap on every metric in our bundle
             for metric_name, fn in METRIC_FNS.items():
                 results.append(paired_bootstrap(
                     y, fn, ra["y_prob"], rb["y_prob"],
@@ -471,9 +375,7 @@ def run_all_pairs(
                     metric_name=metric_name,
                 ))
     df = pd.DataFrame([r.as_row() for r in results])
-    # BH correction per (test, metric) family — fairest rescue of multiple
-    # comparisons, preventing e.g. DeLong rejections being inflated by the
-    # sheer number of model pairs.
+    # BH per (test, metric) family — don't inflate DeLong across pairs
     df["q_value"] = np.nan
     for (test, metric), grp in df.groupby(["test", "metric"]):
         bh = bh_fdr(grp["p_value"].tolist(), q=0.05)
@@ -483,11 +385,10 @@ def run_all_pairs(
 
 
 def plot_pvalue_heatmap(df: pd.DataFrame, out_path: Path, test: str = "delong") -> None:
-    """Matrix heatmap of DeLong (or other) p-values across model pairs."""
+    """symmetric p-value heatmap for one test."""
     sub = df[df["test"] == test]
     if sub.empty:
         return
-    # Symmetric matrix.
     models = sorted(set(sub["model_a"]).union(sub["model_b"]))
     M = len(models)
     idx = {m: i for i, m in enumerate(models)}
@@ -525,8 +426,8 @@ def plot_pvalue_heatmap(df: pd.DataFrame, out_path: Path, test: str = "delong") 
 def _build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         description=(
-            "Phase 12 significance testing — McNemar, DeLong, paired "
-            "bootstrap, BH-FDR across every model pair."
+            "Significance testing: McNemar, DeLong, paired bootstrap, BH-FDR "
+            "across every model pair."
         ),
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
@@ -571,11 +472,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     csv_path = args.output_dir / "pairwise_tests.csv"
     df.to_csv(csv_path, index=False)
 
-    # Power analysis — minimum N to detect the smallest AUC gap we care about.
     prevalence = float(np.mean(loaded[0]["y_true"]))
     power_rows: List[Dict[str, Any]] = []
     for delta in (0.005, 0.01, 0.02):
-        # Headline AUC of the best transformer run for the calculation.
         auc0 = 0.78
         auc1 = auc0 + delta
         n_req = min_n_for_auc_difference(auc1, auc0, prevalence=prevalence)

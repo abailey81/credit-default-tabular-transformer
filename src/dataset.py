@@ -1,25 +1,6 @@
-"""
-dataset.py — DataLoader construction helpers for the credit-default task.
-
-This module does NOT define the Dataset itself — that stays in :mod:`tokenizer`
-as :class:`tokenizer.CreditDefaultDataset` for historical reasons and to keep
-all tokenisation concerns in one place. Instead, this module provides:
-
-    * :class:`StratifiedBatchSampler` — a sampler that guarantees every batch
-      contains the positive-class rate observed in the training set, rather
-      than relying on random sampling to approximately hit it. Useful for
-      small-batch training on imbalanced data (Plan §8.8).
-
-    * :func:`make_loader` — one-liner DataLoader factory that chooses the
-      right sampler, collate function, and DataLoader flags based on whether
-      we're in supervised training, MTLM pretraining, or plain evaluation.
-
-All components respect :mod:`utils.set_deterministic`: an explicit ``seed``
-parameter drives a local :class:`torch.Generator` so that sampling is
-reproducible independently of the global RNG state.
-
-References: Plan §8.8 (data loading), §8.5 (MTLM).
-"""
+"""DataLoader helpers. Dataset lives in tokenizer.py; this file has
+StratifiedBatchSampler (fixed pos-rate per batch) and make_loader
+(picks sampler + collate + flags for train/val/test/mtlm)."""
 
 from __future__ import annotations
 
@@ -46,19 +27,9 @@ __all__ = [
 ]
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Collate function (hoisted from tokenizer.MTLMCollator for reuse)
-# ──────────────────────────────────────────────────────────────────────────────
-
-
 def default_collate(batch: Sequence[Dict[str, Any]]) -> Dict[str, torch.Tensor]:
-    """
-    Stack per-item dicts from :class:`CreditDefaultDataset` into a batched dict.
-
-    Identical in shape contract to
-    ``torch.utils.data.default_collate`` but preserves the nested
-    ``cat_indices`` dict layout that :class:`tokenizer.FeatureEmbedding` expects.
-    """
+    """Stack per-item dicts into a batch dict, keeping the nested cat_indices
+    layout that FeatureEmbedding expects."""
     cat_indices = {
         feat: torch.stack([item["cat_indices"][feat] for item in batch])
         for feat in CATEGORICAL_FEATURES
@@ -73,53 +44,16 @@ def default_collate(batch: Sequence[Dict[str, Any]]) -> Dict[str, torch.Tensor]:
     }
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-# StratifiedBatchSampler
-# ──────────────────────────────────────────────────────────────────────────────
-
-
 class StratifiedBatchSampler(Sampler[List[int]]):
-    """
-    Samples batches that preserve the overall positive-class rate.
+    """Batches with a fixed positive-class rate.
 
-    Motivation: with a 22.1% default rate and ``batch_size=256``, a naïvely
-    random batch has a standard deviation of ~2.6% on the realised positive
-    rate. That occasionally produces batches with < 17% or > 28% positives,
-    which hurts gradient stability for class-weighted losses. Stratified
-    sampling caps this variance by construction — every batch contains
-    exactly ``round(batch_size * positive_rate)`` positive samples.
+    At 22.1% defaults and bs=256, random batches have ~2.6% std on the realised
+    rate and occasionally dip below 17% or above 28%, which hurts gradients for
+    class-weighted losses. This one splits the dataset into pos/neg pools and
+    yields exactly round(bs × pos_rate) positives + the rest negatives per batch.
 
-    The sampler:
-
-    1. Partitions the dataset into positive and negative indices.
-    2. On each epoch, reshuffles each partition (optionally with ``generator``).
-    3. Yields batches formed by sampling ``k_pos`` from the positive pool and
-       ``k_neg`` from the negative pool without replacement, where
-       ``k_pos + k_neg == batch_size`` and the ratio matches the overall rate.
-
-    If either pool is exhausted before the other, ``drop_last=True`` ignores
-    the trailing partial batch; ``drop_last=False`` emits what's left
-    (possibly with slightly different ratio).
-
-    Parameters
-    ----------
-    labels : array-like of shape (N,)
-        Binary class labels (0 or 1). Typically ``dataset.tensors["labels"]``
-        or an equivalent 1-D tensor/ndarray.
-    batch_size : int
-        Total samples per batch.
-    drop_last : bool
-        If True, drop the final partial batch (standard PyTorch semantics).
-    shuffle : bool
-        If False, emit batches in a deterministic order (useful for val/test).
-    generator : Optional[torch.Generator]
-        Seeded generator for reproducible sampling.
-
-    Yields
-    ------
-    List[int]
-        A list of dataset indices of length ``batch_size`` (or less, on the
-        final batch when ``drop_last=False``).
+    drop_last=True drops the trailing partial; drop_last=False emits it at a
+    slightly off ratio.
     """
 
     def __init__(
@@ -133,7 +67,6 @@ class StratifiedBatchSampler(Sampler[List[int]]):
         if batch_size <= 0:
             raise ValueError(f"batch_size must be > 0, got {batch_size}")
 
-        # Normalise labels to a 1-D int64 tensor.
         if isinstance(labels, torch.Tensor):
             lbl = labels.detach().cpu().long().view(-1)
         else:
@@ -151,7 +84,6 @@ class StratifiedBatchSampler(Sampler[List[int]]):
         self._neg_indices = neg_idx
 
         self._pos_rate = float(len(pos_idx) / len(lbl))
-        # Compute how many positives / negatives per batch.
         self._k_pos = max(1, int(round(batch_size * self._pos_rate)))
         self._k_neg = batch_size - self._k_pos
         if self._k_neg <= 0:
@@ -165,28 +97,21 @@ class StratifiedBatchSampler(Sampler[List[int]]):
         self._shuffle = shuffle
         self._generator = generator
 
-        # How many full batches we can produce in one epoch — bounded by
-        # whichever class runs out first.
+        # bounded by whichever pool runs out first
         n_pos_batches = len(pos_idx) // self._k_pos
         n_neg_batches = len(neg_idx) // self._k_neg
         self._n_batches_full = min(n_pos_batches, n_neg_batches)
 
-    # --------------------------------------------------------------- utils
-
     def _shuffled(self, tensor: torch.Tensor) -> torch.Tensor:
-        """Return a shuffled view of ``tensor`` using the local generator."""
         if not self._shuffle:
             return tensor
         perm = torch.randperm(len(tensor), generator=self._generator)
         return tensor[perm]
 
-    # --------------------------------------------------------------- iter
-
     def __iter__(self) -> Iterator[List[int]]:
         pos = self._shuffled(self._pos_indices)
         neg = self._shuffled(self._neg_indices)
 
-        # Emit as many stratified batches as both pools can support.
         for b in range(self._n_batches_full):
             pos_chunk = pos[b * self._k_pos : (b + 1) * self._k_pos]
             neg_chunk = neg[b * self._k_neg : (b + 1) * self._k_neg]
@@ -199,7 +124,6 @@ class StratifiedBatchSampler(Sampler[List[int]]):
         if self._drop_last:
             return
 
-        # Emit any residual as a final partial batch if possible.
         pos_used = self._n_batches_full * self._k_pos
         neg_used = self._n_batches_full * self._k_neg
         pos_remain = pos[pos_used:]
@@ -214,15 +138,9 @@ class StratifiedBatchSampler(Sampler[List[int]]):
     def __len__(self) -> int:
         if self._drop_last:
             return self._n_batches_full
-        # +1 if there's residual
         pos_rem = len(self._pos_indices) - self._n_batches_full * self._k_pos
         neg_rem = len(self._neg_indices) - self._n_batches_full * self._k_neg
         return self._n_batches_full + (1 if (pos_rem + neg_rem) > 0 else 0)
-
-
-# ──────────────────────────────────────────────────────────────────────────────
-# DataLoader factory
-# ──────────────────────────────────────────────────────────────────────────────
 
 
 def make_loader(
@@ -237,38 +155,16 @@ def make_loader(
     seed: Optional[int] = None,
     drop_last: Optional[bool] = None,
 ) -> DataLoader:
-    """
-    Construct a DataLoader with the right sampler / collate for each pipeline mode.
+    """DataLoader factory for the four pipeline modes.
 
-    Parameters
-    ----------
-    dataset
-        Typically a :class:`CreditDefaultDataset`.
-    batch_size
-        Minibatch size.
-    mode
-        One of:
+    mode:
+      "train"       shuffled, drop_last=True
+      "val"/"test"  unshuffled, drop_last=False
+      "mtlm"        shuffled with MTLMCollator (default one built if mtlm is None)
 
-        * ``"train"``  — shuffled, ``drop_last=True`` by default
-        * ``"val"``    — unshuffled, ``drop_last=False``
-        * ``"test"``   — unshuffled, ``drop_last=False``
-        * ``"mtlm"``   — shuffled, MTLM collator added automatically (requires
-          ``mtlm`` to be passed or a default is created)
-    mtlm
-        :class:`MTLMCollator` instance, used only when ``mode="mtlm"``.
-        If None and mode is ``"mtlm"``, a default collator with seed=``seed``
-        is created.
-    stratified
-        If True, use :class:`StratifiedBatchSampler`. Only valid with
-        ``mode="train"`` or ``"mtlm"``. For val/test it is explicitly ignored.
-    num_workers
-        Forwarded to DataLoader.
-    pin_memory
-        Forwarded to DataLoader. Set True for CUDA training.
-    seed
-        If provided, seeds the sampler's local generator for reproducibility.
-    drop_last
-        Overrides the per-mode default if set.
+    stratified=True swaps in StratifiedBatchSampler (train/mtlm only, ignored for val/test).
+    seed seeds a local torch.Generator so sampling is reproducible.
+    drop_last overrides the mode default.
     """
     if mode not in ("train", "val", "test", "mtlm"):
         raise ValueError(f"Unknown mode: {mode!r}")
@@ -281,17 +177,13 @@ def make_loader(
     if seed is not None:
         generator = torch.Generator().manual_seed(seed)
 
-    # Choose the collate function.
     if mode == "mtlm":
         collator = mtlm if mtlm is not None else MTLMCollator(seed=seed)
         collate_fn: Callable = collator
     else:
         collate_fn = default_collate
 
-    # Choose the sampler.
     if stratified and mode in ("train", "mtlm"):
-        # Fish the labels out of the dataset. CreditDefaultDataset exposes them
-        # via the `.tensors` property.
         if not hasattr(dataset, "tensors"):
             raise ValueError(
                 "Stratified sampling requires a dataset exposing `.tensors['labels']` "
@@ -325,22 +217,17 @@ def make_loader(
         )
 
     logger.info(
-        "make_loader(mode=%s, batch=%d, stratified=%s) → %d batches",
+        "make_loader(mode=%s, batch=%d, stratified=%s) -> %d batches",
         mode, batch_size, stratified, len(loader),
     )
     return loader
 
-
-# ──────────────────────────────────────────────────────────────────────────────
-# Smoke test
-# ──────────────────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
     import json
     import sys
     from pathlib import Path
 
-    # UTF-8 stdout so box-drawing separators print cleanly on Windows.
     for _s in (sys.stdout, sys.stderr):
         if hasattr(_s, "reconfigure"):
             try:
@@ -350,7 +237,6 @@ if __name__ == "__main__":
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s  %(message)s")
 
-    # Load real preprocessed data.
     root = Path(__file__).resolve().parent.parent
     meta_path = root / "data/processed/feature_metadata.json"
     train_csv = root / "data/processed/train_scaled.csv"
@@ -370,15 +256,13 @@ if __name__ == "__main__":
     cat_vocab = build_categorical_vocab(meta)
     ds = CreditDefaultDataset(df_train, cat_vocab, verbose=False)
 
-    # ── 1. Standard supervised train loader ──
-    print("── 1. Standard train loader ──")
+    print("1. standard train loader:")
     loader = make_loader(ds, batch_size=256, mode="train", seed=42)
     batch = next(iter(loader))
     assert batch["num_values"].shape == (256, 14)
     print(f"  shape OK: {tuple(batch['num_values'].shape)}, labels rate={batch['label'].mean().item():.3f}")
 
-    # ── 2. Stratified train loader ──
-    print("\n── 2. Stratified train loader ──")
+    print("\n2. stratified train loader:")
     loader_s = make_loader(ds, batch_size=256, mode="train", stratified=True, seed=42)
     rates = []
     for b in loader_s:
@@ -387,21 +271,19 @@ if __name__ == "__main__":
     mean_rate = float(np.mean(rates))
     std_rate = float(np.std(rates))
     print(f"  dataset pos rate: {pos_rate:.4f}")
-    print(f"  batch rate mean±std: {mean_rate:.4f} ± {std_rate:.4f}")
+    print(f"  batch rate mean+/-std: {mean_rate:.4f} +/- {std_rate:.4f}")
     assert std_rate < 0.01, f"stratified batches should have tiny variance, got std={std_rate}"
-    print(f"  stratified variance < 0.01 ✓")
+    print(f"  stratified variance < 0.01 OK")
 
-    # ── 3. Val loader (unshuffled, no drop_last) ──
-    print("\n── 3. Val loader ──")
+    print("\n3. val loader (unshuffled, no drop_last):")
     df_val = pd.read_csv(val_csv)
     ds_val = CreditDefaultDataset(df_val, cat_vocab, verbose=False)
     loader_v = make_loader(ds_val, batch_size=256, mode="val", seed=42)
     total_seen = sum(b["num_values"].shape[0] for b in loader_v)
     assert total_seen == len(ds_val), f"val loader dropped rows: {total_seen} vs {len(ds_val)}"
-    print(f"  every val row visited: {total_seen}/{len(ds_val)} ✓")
+    print(f"  every val row visited: {total_seen}/{len(ds_val)} OK")
 
-    # ── 4. MTLM loader ──
-    print("\n── 4. MTLM pretraining loader ──")
+    print("\n4. MTLM pretraining loader:")
     from tokenizer import MTLMCollator
     mtlm = MTLMCollator(mask_prob=0.15, min_mask_per_row=1, max_mask_per_row=5, seed=7)
     loader_m = make_loader(ds, batch_size=128, mode="mtlm", mtlm=mtlm, seed=7)
@@ -411,16 +293,14 @@ if __name__ == "__main__":
     counts = batch_m["mask_positions"].sum(dim=1)
     assert (counts >= 1).all() and (counts <= 5).all()
     print(f"  mtlm batch keys: {sorted(batch_m.keys())}")
-    print(f"  mask counts per row in [1, 5] ✓")
+    print(f"  mask counts per row in [1, 5] OK")
 
-    # ── 5. Reproducibility ──
-    print("\n── 5. Reproducibility under same seed ──")
+    print("\n5. reproducibility under same seed:")
     l1 = make_loader(ds, batch_size=256, mode="train", stratified=True, seed=42)
     l2 = make_loader(ds, batch_size=256, mode="train", stratified=True, seed=42)
     b1 = next(iter(l1))
     b2 = next(iter(l2))
-    # Compare the stacked labels tensor (same indices → same labels).
     assert torch.equal(b1["label"], b2["label"]), "stratified sampling not reproducible under same seed"
-    print("  identical batches for identical seed ✓")
+    print("  identical batches for identical seed OK")
 
-    print("\nAll dataset smoke tests passed.")
+    print("\nall dataset smoke tests passed.")

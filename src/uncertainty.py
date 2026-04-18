@@ -1,55 +1,7 @@
-"""
-uncertainty.py — Phase 11B: Monte-Carlo-Dropout predictive uncertainty (N11).
-
-Motivation
-----------
-Credit decisions are regulated — a production model that lends (or denies)
-based on an over-confident but miscalibrated probability is an operational
-risk. Point estimates hide that risk; a well-designed system surfaces
-"predict with confidence" vs "abstain / escalate for manual review".
-
-Monte-Carlo dropout (Gal & Ghahramani, 2016) approximates posterior
-predictive uncertainty from a trained dropout network by *keeping dropout
-active at inference*, sampling the output distribution, and reporting
-moments of that distribution. This is the cheapest practical Bayesian-
-deep-learning approximation: no architecture change, no re-training, just
-T forward passes.
-
-Pipeline
---------
-1. Load a trained :class:`TabularTransformer` checkpoint.
-2. Flip every ``nn.Dropout`` module to ``train`` mode (and only those —
-   LayerNorm's γ/β are already deterministic, so leaving them eval-mode
-   keeps the statistics stable).
-3. For each test row, run ``T`` forward passes; stack predictions into a
-   ``(T, N)`` tensor of probabilities.
-4. Compute per-row ``mean``, ``std``, predictive entropy, and a
-   mutual-information proxy (total − aleatoric). Report the
-   **refuse-to-predict** curve: as we defer the top-k uncertain rows,
-   how does accuracy on the retained subset evolve? A well-calibrated
-   uncertainty signal is monotone on this curve.
-
-Why MC-dropout here
--------------------
-Deep ensembles are a stronger uncertainty signal but require training N
-independent networks; we already have 3 seeds for the ensemble row in
-the comparison table. MC-dropout is a complementary, single-seed signal
-that isolates *aleatoric* uncertainty from the *epistemic* contribution
-a deep ensemble captures. For the report we can compare both.
-
-Artefacts
----------
-* ``results/uncertainty/mc_dropout.npz``      — per-row arrays: mean, std,
-  predictive_entropy, mutual_info, y_true.
-* ``results/uncertainty/uncertainty_summary.json`` — headline scalars.
-* ``figures/uncertainty_refuse_curve.png``    — accuracy / AUC as a
-  function of abstention fraction.
-* ``figures/uncertainty_entropy_hist.png``    — histogram of predictive
-  entropy split by correct / incorrect prediction.
-
-References: Plan §13.6 / N11, Gal & Ghahramani (2016) "Dropout as a
-Bayesian approximation".
-"""
+"""MC-dropout uncertainty: dropout stays on at inference, T passes per row,
+then per-row mean/std + predictive/aleatoric entropy + BALD mutual info
+(Gal & Ghahramani 2016). Also a refuse curve — accuracy/AUC on the kept
+subset as you defer the top-k most uncertain rows."""
 
 from __future__ import annotations
 
@@ -79,21 +31,24 @@ from utils import load_checkpoint  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
+__all__ = [
+    "UncertaintyArrays",
+    "enable_dropout",
+    "mc_dropout_predict",
+    "uncertainty_from_samples",
+    "refuse_curve",
+    "plot_refuse_curve",
+    "plot_entropy_hist",
+    "main",
+    "EPS",
+]
+
 EPS = 1e-12
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-# MC-dropout machinery
-# ──────────────────────────────────────────────────────────────────────────────
-
-
 def enable_dropout(model: nn.Module) -> int:
-    """Flip every ``nn.Dropout`` / ``nn.Dropout2d`` submodule to training
-    mode, leaving every other module (LayerNorm etc.) in eval mode.
-
-    Returns the number of dropout modules switched — ≥1 is the precondition
-    for MC-dropout to produce non-degenerate samples.
-    """
+    """Put every Dropout in train(), leave the rest alone. Returns count.
+    Zero = no stochastic path, MC-dropout is a no-op on this model."""
     count = 0
     for m in model.modules():
         if isinstance(m, (nn.Dropout, nn.Dropout1d, nn.Dropout2d, nn.Dropout3d)):
@@ -110,25 +65,18 @@ def mc_dropout_predict(
     device: Optional[torch.device] = None,
     seed: int = 0,
 ) -> Dict[str, np.ndarray]:
-    """Run ``n_samples`` stochastic forward passes with dropout active.
-
-    Returns a dict with keys:
-
-    * ``probs``    — ``(T, N)`` per-sample probabilities.
-    * ``y_true``   — ``(N,)`` labels.
-    """
+    """T stochastic forward passes. → {"probs": (T, N), "y_true": (N,)}."""
     if n_samples < 2:
         raise ValueError(f"n_samples must be >= 2 for MC-dropout, got {n_samples}")
     if device is None:
         device = next(model.parameters()).device
 
-    # Capture eval-mode shape for everything, then re-enable dropout only.
     model.eval()
     n_dropout = enable_dropout(model)
     if n_dropout == 0:
         raise RuntimeError(
-            "No nn.Dropout modules found — this model has no MC-dropout "
-            "signal. Enable dropout>0 at construction and re-train."
+            "No nn.Dropout modules found; this model has no MC-dropout signal. "
+            "Enable dropout>0 at construction and re-train."
         )
 
     torch.manual_seed(seed)
@@ -137,7 +85,7 @@ def mc_dropout_predict(
     all_labels: Optional[np.ndarray] = None
 
     for t in range(n_samples):
-        # Re-seed per-sample so reruns are reproducible.
+        # per-pass reseed so reruns are bit-identical
         torch.manual_seed(seed + t)
         probs_chunks: List[np.ndarray] = []
         labels_chunks: List[np.ndarray] = []
@@ -159,49 +107,42 @@ def mc_dropout_predict(
         if all_labels is None:
             all_labels = np.concatenate(labels_chunks, axis=0)
 
+    # undo enable_dropout() — otherwise the next model(batch) silently
+    # returns stochastic output and the caller will be very confused
+    model.eval()
     probs = np.stack(all_probs, axis=0)  # (T, N)
     return {"probs": probs, "y_true": all_labels}
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Uncertainty metrics derived from the MC-dropout distribution
-# ──────────────────────────────────────────────────────────────────────────────
-
-
 def _bernoulli_entropy(p: np.ndarray) -> np.ndarray:
-    """H(Bern(p)) in nats. Clamp the edges to avoid log(0)."""
+    """H(Bern(p)) in nats. Edges clipped so log(0) doesn't bite."""
     p_c = np.clip(p, EPS, 1.0 - EPS)
     return -(p_c * np.log(p_c) + (1.0 - p_c) * np.log(1.0 - p_c))
 
 
 @dataclass
 class UncertaintyArrays:
-    mean: np.ndarray            # (N,)  posterior-mean prediction
-    std: np.ndarray             # (N,)  posterior std — a dispersion proxy
-    predictive_entropy: np.ndarray   # (N,) total uncertainty
-    aleatoric: np.ndarray            # (N,) expected data-uncertainty
-    mutual_info: np.ndarray          # (N,) epistemic uncertainty (BALD)
+    mean: np.ndarray                 # (N,)
+    std: np.ndarray                  # (N,)
+    predictive_entropy: np.ndarray   # (N,) total
+    aleatoric: np.ndarray            # (N,) expected data
+    mutual_info: np.ndarray          # (N,) BALD = total − aleatoric
     y_true: np.ndarray               # (N,)
 
 
 def uncertainty_from_samples(
     probs: np.ndarray, y_true: np.ndarray,
 ) -> UncertaintyArrays:
-    """Derive the uncertainty arrays from the raw ``(T, N)`` MC-dropout
-    probability matrix.
+    """(T, N) probs → per-row uncertainty.
 
-    * ``predictive_entropy = H(E_T[p_t])``   — total predictive uncertainty.
-    * ``aleatoric          = E_T[H(p_t)]``   — expected data uncertainty.
-    * ``mutual_info        = predictive_entropy − aleatoric``  (BALD; Houlsby
-      et al. 2011). This is the epistemic signal; zero when all samples
-      agree regardless of their confidence.
-    """
+    predictive = H(E_T[p_t]); aleatoric = E_T[H(p_t)]; BALD = predictive −
+    aleatoric (≈ 0 when all T samples agree, regardless of confidence)."""
     if probs.ndim != 2:
         raise ValueError(f"probs must be 2-D (T, N), got shape {probs.shape}")
     mean = probs.mean(axis=0)
     std = probs.std(axis=0)
     predictive_entropy = _bernoulli_entropy(mean)
-    per_sample_entropy = _bernoulli_entropy(probs)           # (T, N)
+    per_sample_entropy = _bernoulli_entropy(probs)   # (T, N)
     aleatoric = per_sample_entropy.mean(axis=0)
     mutual_info = predictive_entropy - aleatoric
     return UncertaintyArrays(
@@ -213,29 +154,20 @@ def uncertainty_from_samples(
     )
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Refuse-to-predict analysis
-# ──────────────────────────────────────────────────────────────────────────────
-
-
 def refuse_curve(
     arrays: UncertaintyArrays,
     threshold: float = 0.5,
     signal: str = "predictive_entropy",
     fractions: Optional[np.ndarray] = None,
 ) -> pd.DataFrame:
-    """For each abstention fraction, defer the most uncertain rows and
-    recompute accuracy + AUC on the retained subset. A useful uncertainty
-    signal produces a monotone increase in accuracy as we abstain more.
+    """Defer top-k most uncertain, score the rest, sweep k.
 
-    * ``signal`` — which uncertainty column to sort by: ``"predictive_entropy"``,
-      ``"aleatoric"``, ``"mutual_info"``, or ``"std"``.
-    * ``fractions`` — abstention fractions in [0, 1). Default: 0, 5%, 10%, …, 60%.
-    """
+    Good signal → accuracy rises monotonically with deferral. `signal` ∈
+    {predictive_entropy, aleatoric, mutual_info, std}."""
     if signal not in {"predictive_entropy", "aleatoric", "mutual_info", "std"}:
         raise ValueError(f"Unknown signal: {signal}")
     u = getattr(arrays, signal)
-    order = np.argsort(-u)   # most uncertain first
+    order = np.argsort(-u)   # descending: most uncertain first
 
     if fractions is None:
         fractions = np.arange(0.0, 0.65, 0.05)
@@ -266,11 +198,6 @@ def refuse_curve(
                                     if (N - n_kept) > 0 else float("nan"),
         })
     return pd.DataFrame(rows)
-
-
-# ──────────────────────────────────────────────────────────────────────────────
-# Plots
-# ──────────────────────────────────────────────────────────────────────────────
 
 
 def plot_refuse_curve(df: pd.DataFrame, out_path: Path) -> None:
@@ -305,7 +232,7 @@ def plot_entropy_hist(arrays: UncertaintyArrays, out_path: Path, threshold: floa
             label=f"incorrect (n={(~correct).sum()})", color="#D55E00")
     ax.set_xlabel("Predictive entropy (nats)")
     ax.set_ylabel("Number of rows")
-    ax.set_title("MC-dropout predictive entropy — correct vs incorrect rows")
+    ax.set_title("MC-dropout predictive entropy, correct vs incorrect rows")
     ax.legend()
     ax.grid(alpha=0.3)
     fig.tight_layout()
@@ -313,20 +240,12 @@ def plot_entropy_hist(arrays: UncertaintyArrays, out_path: Path, threshold: floa
     plt.close(fig)
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-# End-to-end
-# ──────────────────────────────────────────────────────────────────────────────
-
-
 def _load_model_from_run(run_dir: Path, trust_source: bool = False) -> TabularTransformer:
-    """Construct a :class:`TabularTransformer` from the run's config.json
-    and load the checkpoint weights.
+    """Rebuild the model from config.json and load weights.
 
-    ``trust_source=False`` (default) routes through the ``.weights`` sidecar
-    with ``weights_only=True`` — the SECURITY_AUDIT C-1 safe path.
-    ``trust_source=True`` opts into pickle-bearing torch.load and should
-    only be used for checkpoints the caller produced themselves.
-    """
+    trust_source=False uses the .weights sidecar with weights_only=True
+    (SECURITY_AUDIT C-1 safe path). Flip to True only for checkpoints you
+    produced yourself."""
     run_dir = Path(run_dir)
     cfg = json.loads((run_dir / "config.json").read_text())
 
@@ -361,31 +280,27 @@ def _load_model_from_run(run_dir: Path, trust_source: bool = False) -> TabularTr
 
 def _build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
-        description=(
-            "Phase 11B Monte-Carlo dropout uncertainty quantification on a "
-            "trained transformer run. T forward passes with dropout active."
-        ),
+        description="MC-dropout uncertainty: T passes with dropout active.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     p.add_argument("--run", type=Path,
                    default=Path("results/transformer/seed_42"),
-                   help="Run directory containing best.pt + config.json.")
+                   help="Run dir with best.pt + config.json.")
     p.add_argument("--test-csv", type=Path,
                    default=Path("data/processed/test_scaled.csv"))
     p.add_argument("--metadata", type=Path,
                    default=Path("data/processed/feature_metadata.json"))
     p.add_argument("--n-samples", type=int, default=50,
-                   help="Number of MC-dropout forward passes.")
+                   help="Number of MC-dropout passes.")
     p.add_argument("--batch-size", type=int, default=256)
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--output-dir", type=Path, default=Path("results/uncertainty"))
     p.add_argument("--figures-dir", type=Path, default=Path("figures"))
     p.add_argument("--trust-source", action="store_true", default=False,
-                   help="Load checkpoints with weights_only=False. Only enable "
-                        "for checkpoints you produced yourself — opts OUT of the "
-                        "SECURITY_AUDIT C-1 safe-default. The `best.pt` bundles "
-                        "we ship include a `.weights` sidecar, so the default "
-                        "(False) works via load_checkpoint's weights-only path.")
+                   help="weights_only=False. Opts out of SECURITY_AUDIT C-1; "
+                        "only use for checkpoints you trained yourself. The "
+                        "shipped best.pt has a .weights sidecar, so leaving "
+                        "this off is the normal path.")
     return p
 
 
@@ -398,10 +313,10 @@ def main(argv: Optional[List[str]] = None) -> int:
     args = _build_parser().parse_args(argv)
 
     if not (args.test_csv.is_file() and args.metadata.is_file()):
-        logger.error("Missing preprocessing outputs — run run_pipeline.py first.")
+        logger.error("Missing preprocessing outputs; run run_pipeline.py first.")
         return 1
     if not (args.run / "best.pt").is_file():
-        logger.error("No checkpoint at %s — run train.py first.", args.run)
+        logger.error("No checkpoint at %s; run train.py first.", args.run)
         return 1
 
     logger.info("Loading checkpoint from %s", args.run)
@@ -423,7 +338,6 @@ def main(argv: Optional[List[str]] = None) -> int:
     )
     arrays = uncertainty_from_samples(samples["probs"], samples["y_true"])
 
-    # Headline scalars.
     y_pred = (arrays.mean >= 0.5).astype(int)
     correct_mask = y_pred == arrays.y_true
     headline = {
@@ -435,8 +349,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         "mean_aleatoric_entropy": float(arrays.aleatoric.mean()),
         "mean_mutual_information": float(arrays.mutual_info.mean()),
         "mean_std": float(arrays.std.mean()),
-        # Spearman correlation between predictive entropy and the
-        # misclassification indicator — a "calibration of uncertainty" score.
+        # entropy-vs-misclass Spearman: uncertainty-calibration score
         "entropy_misclass_correlation": float(
             pd.Series(arrays.predictive_entropy)
             .corr(pd.Series((~correct_mask).astype(int)), method="spearman")
@@ -459,7 +372,6 @@ def main(argv: Optional[List[str]] = None) -> int:
         json.dumps(headline, indent=2, default=str)
     )
 
-    # Refuse-to-predict curves for each signal.
     dfs = [refuse_curve(arrays, signal=s)
            for s in ("predictive_entropy", "mutual_info", "std")]
     refuse = pd.concat(dfs, ignore_index=True)

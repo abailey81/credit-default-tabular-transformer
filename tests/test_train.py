@@ -1,5 +1,5 @@
-"""Tests for src/train.py — LR schedule, loss factory, metrics, eval loop,
-optimiser construction, and end-to-end smoke training."""
+"""train.py — LR schedule, loss factory, metrics, eval loop, optimiser
+construction, e2e smoke."""
 
 from __future__ import annotations
 
@@ -15,7 +15,6 @@ import torch
 import torch.nn as nn
 from torch.optim import AdamW
 
-# Make src/ importable
 REPO = Path(__file__).resolve().parent.parent
 SRC = REPO / "src"
 if str(SRC) not in sys.path:
@@ -24,12 +23,7 @@ if str(SRC) not in sys.path:
 from losses import FocalLoss, LabelSmoothingBCELoss, WeightedBCELoss  # noqa: E402
 from model import TabularTransformer  # noqa: E402
 
-import train as train_mod  # noqa: E402 — module under test
-
-
-# ──────────────────────────────────────────────────────────────────────────────
-# Cosine-with-warmup LR schedule
-# ──────────────────────────────────────────────────────────────────────────────
+import train as train_mod  # noqa: E402
 
 
 def test_cosine_warmup_schedule_starts_at_zero_and_peaks():
@@ -43,11 +37,8 @@ def test_cosine_warmup_schedule_starts_at_zero_and_peaks():
         lrs.append(opt.param_groups[0]["lr"])
         opt.step()
         sched.step()
-    # Step 0: LR = 0 (linear warmup starts from zero).
     assert lrs[0] == pytest.approx(0.0, abs=1e-9)
-    # Step 10 (end of warmup): LR ≈ peak.
     assert lrs[10] == pytest.approx(1.0, abs=1e-9)
-    # Last step: cosine has decayed to ~0 (min_lr_frac=0.0).
     assert lrs[-1] < 0.01
 
 
@@ -60,7 +51,6 @@ def test_cosine_warmup_schedule_floor_respects_min_lr_frac():
     for _ in range(50):
         opt.step()
         sched.step()
-    # At the end, cosine has bottomed out at min_lr_frac.
     final = opt.param_groups[0]["lr"]
     assert 0.095 <= final <= 0.105
 
@@ -83,17 +73,10 @@ def test_cosine_warmup_schedule_monotonic_warmup_then_decay():
         lrs.append(opt.param_groups[0]["lr"])
         opt.step()
         sched.step()
-    # Warmup is strictly non-decreasing up to step 20.
     for i in range(1, 20):
         assert lrs[i] >= lrs[i - 1]
-    # Post-warmup is non-increasing (cosine).
     for i in range(21, 100):
         assert lrs[i] <= lrs[i - 1] + 1e-9
-
-
-# ──────────────────────────────────────────────────────────────────────────────
-# Loss factory
-# ──────────────────────────────────────────────────────────────────────────────
 
 
 def _fake_args(**overrides: Any) -> Namespace:
@@ -111,7 +94,7 @@ def test_loss_factory_focal_default():
     y = torch.tensor([0.0, 0.0, 0.0, 1.0])
     loss = train_mod.build_primary_loss(_fake_args(), y)
     assert isinstance(loss, FocalLoss)
-    # Balanced α evaluates to (α_pos = N_neg/N = 0.75, α_neg = 0.25).
+    # balanced α = (α_pos = N_neg/N = 0.75, α_neg = 0.25)
     assert isinstance(loss.alpha, tuple)
     assert loss.alpha == pytest.approx((0.75, 0.25))
 
@@ -153,13 +136,7 @@ def test_resolve_focal_alpha_rejects_garbage():
         train_mod._resolve_focal_alpha("not-a-number")
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Metrics
-# ──────────────────────────────────────────────────────────────────────────────
-
-
 def test_compute_ece_on_perfect_predictions_is_zero():
-    # All probabilities are 0 or 1 exactly matching labels.
     y_true = np.array([0, 0, 1, 1])
     y_prob = np.array([0.0, 0.0, 1.0, 1.0])
     assert train_mod.compute_ece(y_true, y_prob, n_bins=10) == pytest.approx(0.0)
@@ -168,7 +145,6 @@ def test_compute_ece_on_perfect_predictions_is_zero():
 def test_compute_ece_on_systematically_overconfident_model_nonzero():
     rng = np.random.default_rng(0)
     y_true = rng.integers(0, 2, size=1000)
-    # Predict 0.9 everywhere — way overconfident for ~50% base rate.
     y_prob = np.full(1000, 0.9)
     ece = train_mod.compute_ece(y_true, y_prob)
     assert ece > 0.3
@@ -188,22 +164,10 @@ def test_compute_classification_metrics_handles_single_class_gracefully():
     y_true = np.zeros(100, dtype=int)
     y_prob = np.full(100, 0.3)
     m = train_mod.compute_classification_metrics(y_true, y_prob)
-    # AUC-ROC is undefined on single-class → NaN via _safe_metric.
     assert np.isnan(m["auc_roc"])
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Evaluate loop
-# ──────────────────────────────────────────────────────────────────────────────
-
-
 def _mini_batch(B: int = 4) -> Dict[str, Any]:
-    """Build a synthetic batch of size ``B`` with valid token shapes.
-
-    All fields are deterministic given ``B`` so tests using the same ``B`` are
-    reproducible. Categorical values cycle through the valid vocab for each
-    feature (2 / 4 / 3 for SEX / EDUCATION / MARRIAGE).
-    """
     torch.manual_seed(0)
     sex = torch.arange(B) % 2
     edu = torch.arange(B) % 4
@@ -217,7 +181,7 @@ def _mini_batch(B: int = 4) -> Dict[str, Any]:
         },
         "pay_state_ids":  torch.zeros(B, 6, dtype=torch.long),
         "pay_severities": torch.zeros(B, 6, dtype=torch.float),
-        "pay_raw":        torch.full((B, 6), 2, dtype=torch.long),  # PAY=0 shifted
+        "pay_raw":        torch.full((B, 6), 2, dtype=torch.long),  # PAY=0 after +2 shift
         "num_values":     torch.randn(B, 14),
         "label":          labels,
     }
@@ -255,13 +219,7 @@ def test_evaluate_on_loader_collects_attn_when_requested():
     )
     assert "attn_weights" in result
     assert len(result["attn_weights"]) == 2
-    # Stacked across 3 batches of 4 = 12 rows.
     assert result["attn_weights"][0].shape == (12, 4, 24, 24)
-
-
-# ──────────────────────────────────────────────────────────────────────────────
-# Optimiser construction — two-group for fine-tuning
-# ──────────────────────────────────────────────────────────────────────────────
 
 
 def test_single_group_optimiser_when_no_pretrain():
@@ -283,19 +241,12 @@ def test_two_group_optimiser_assigns_smaller_lr_to_encoder_when_pretrain():
     )
     opt = train_mod.build_optimizer(model, args, pretrained=True)
     assert len(opt.param_groups) == 2
-    # First group = encoder (lower LR), second = head (peak LR).
     encoder_group, head_group = opt.param_groups[0], opt.param_groups[1]
     assert encoder_group["lr"] == pytest.approx(3e-4 * 0.2)
     assert head_group["lr"] == pytest.approx(3e-4)
-    # Head group must include the aux head when aux_pay0=True.
     head_param_ids = {id(p) for p in head_group["params"]}
     aux_head_ids = {id(p) for p in model.aux_pay0_head.parameters()}  # type: ignore[union-attr]
     assert aux_head_ids.issubset(head_param_ids)
-
-
-# ──────────────────────────────────────────────────────────────────────────────
-# train_one_epoch — single-step correctness
-# ──────────────────────────────────────────────────────────────────────────────
 
 
 def test_train_one_epoch_reduces_loss_on_a_trivial_task():
@@ -307,7 +258,6 @@ def test_train_one_epoch_reduces_loss_on_a_trivial_task():
 
     batch = _mini_batch(B=16)
     loader = _TrivialLoader(batch, n_batches=5)
-    # Measure starting loss.
     with torch.no_grad():
         start_logit = model(batch)["logit"]
         start_loss = loss_fn(start_logit, batch["label"]).item()
@@ -319,7 +269,6 @@ def test_train_one_epoch_reduces_loss_on_a_trivial_task():
         end_logit = model(batch)["logit"]
         end_loss = loss_fn(end_logit, batch["label"]).item()
 
-    # Loss should not increase over 5 steps on a constant batch.
     assert end_loss <= start_loss + 1e-3, (
         f"loss went up: {start_loss:.4f} → {end_loss:.4f}"
     )
@@ -328,7 +277,6 @@ def test_train_one_epoch_reduces_loss_on_a_trivial_task():
 
 
 def test_train_one_epoch_with_aux_loss_updates_aux_head():
-    """When aux_lambda > 0, the aux head must be exercised and updated."""
     torch.manual_seed(0)
     model = TabularTransformer(aux_pay0=True)
     opt = AdamW(model.parameters(), lr=1e-3)
@@ -337,7 +285,6 @@ def test_train_one_epoch_with_aux_loss_updates_aux_head():
     aux_loss = nn.CrossEntropyLoss()
 
     batch = _mini_batch(B=8)
-    # Capture aux head weight before training.
     assert model.aux_pay0_head is not None
     before = next(iter(model.aux_pay0_head.parameters())).detach().clone()
 
@@ -347,19 +294,10 @@ def test_train_one_epoch_with_aux_loss_updates_aux_head():
         aux_loss_fn=aux_loss, aux_lambda=0.5,
     )
     after = next(iter(model.aux_pay0_head.parameters())).detach().clone()
-    # Aux head weights must have changed.
     assert not torch.allclose(before, after), "aux head did not update"
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-# End-to-end smoke training
-# ──────────────────────────────────────────────────────────────────────────────
-
-
 def test_main_smoke_test_produces_all_expected_artefacts(tmp_path: Path):
-    """Run a 2-epoch smoke training on ~500 rows and confirm every output
-    artefact is present and structurally valid."""
-    # Skip if preprocessing outputs aren't available.
     if not (REPO / "data/processed/train_scaled.csv").is_file():
         pytest.skip("preprocessing outputs not present; run run_pipeline.py first")
 
@@ -376,13 +314,11 @@ def test_main_smoke_test_produces_all_expected_artefacts(tmp_path: Path):
     ])
     assert rc == 0
 
-    # config.json
     config = json.loads((output_dir / "config.json").read_text())
     for key in ("seed", "param_count", "total_steps", "warmup_steps",
                 "train_size", "val_size", "test_size"):
         assert key in config
 
-    # train_log.csv
     import pandas as _pd
     log = _pd.read_csv(output_dir / "train_log.csv")
     assert len(log) == 2
@@ -390,17 +326,14 @@ def test_main_smoke_test_produces_all_expected_artefacts(tmp_path: Path):
     assert "val_auc_roc" in log.columns
     assert "lr" in log.columns
 
-    # test_metrics.json
     tm = json.loads((output_dir / "test_metrics.json").read_text())
     assert "metrics" in tm
     assert "threshold_sweep" in tm
 
-    # test_predictions.npz
     preds = np.load(output_dir / "test_predictions.npz")
     assert set(preds.files) == {"y_true", "y_prob", "y_pred"}
     assert preds["y_true"].shape == preds["y_prob"].shape == preds["y_pred"].shape
 
-    # checkpoint + sidecars
     assert (output_dir / "best.pt").is_file()
     assert (output_dir / "best.pt.weights").is_file()
     assert (output_dir / "best.pt.meta.json").is_file()

@@ -1,4 +1,4 @@
-"""Tests for src/losses.py — WeightedBCE, FocalLoss, LabelSmoothingBCE."""
+"""WeightedBCE / FocalLoss / LabelSmoothingBCE."""
 
 from __future__ import annotations
 
@@ -13,11 +13,6 @@ from losses import (  # noqa: E402
     balanced_alpha,
     compute_pos_weight,
 )
-
-
-# ──────────────────────────────────────────────────────────────────────────────
-# class-weight helpers
-# ──────────────────────────────────────────────────────────────────────────────
 
 
 def test_compute_pos_weight_on_imbalanced():
@@ -36,17 +31,12 @@ def test_balanced_alpha_sums_to_one():
     y = torch.cat([torch.zeros(78), torch.ones(22)])
     ap, an = balanced_alpha(y)
     assert pytest.approx(ap + an, rel=1e-9) == 1.0
-    assert ap > an  # minority class gets higher weight
+    assert ap > an
 
 
 def test_balanced_alpha_single_class_raises():
     with pytest.raises(ValueError):
         balanced_alpha(torch.zeros(10))
-
-
-# ──────────────────────────────────────────────────────────────────────────────
-# WeightedBCELoss
-# ──────────────────────────────────────────────────────────────────────────────
 
 
 def test_wbce_matches_bce_when_pos_weight_is_one():
@@ -71,11 +61,6 @@ def test_wbce_gradient_flow():
     assert logits.grad is not None and logits.grad.abs().sum() > 0
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-# FocalLoss
-# ──────────────────────────────────────────────────────────────────────────────
-
-
 def test_focal_gamma_zero_equals_bce():
     logits = torch.randn(128)
     y = torch.randint(0, 2, (128,)).float()
@@ -85,7 +70,6 @@ def test_focal_gamma_zero_equals_bce():
 
 
 def test_focal_strictly_decreases_with_gamma():
-    """On the same data, larger γ ⇒ smaller loss (by construction)."""
     logits = torch.randn(1024)
     y = torch.randint(0, 2, (1024,)).float()
     losses = [FocalLoss(gamma=g, alpha=None)(logits, y).item() for g in (0.0, 1.0, 2.0, 3.0)]
@@ -97,14 +81,14 @@ def test_focal_balanced_alpha_fits_once():
     logits = torch.randn(100)
     fl = FocalLoss(gamma=2.0, alpha="balanced")
     fl(logits, y)
-    fl(logits, y)  # second call should reuse the fit
+    fl(logits, y)  # second call must reuse the fit
     ap, an = fl._balanced_fitted
-    assert 0.75 < ap < 0.85  # minority is 20% so alpha_pos ≈ 0.80
+    assert 0.75 < ap < 0.85
 
 
 def test_focal_rejects_bad_tuple():
-    # alpha is resolved lazily on first forward — must actually call it.
-    fl = FocalLoss(gamma=2.0, alpha=(0.5,))  # length 1 tuple
+    # alpha is resolved lazily on first forward, so we must actually call it
+    fl = FocalLoss(gamma=2.0, alpha=(0.5,))
     logits = torch.randn(8)
     y = torch.randint(0, 2, (8,)).float()
     with pytest.raises(ValueError, match="alpha tuple must have length 2"):
@@ -123,11 +107,6 @@ def test_focal_gradient_flow():
     assert logits.grad is not None and torch.isfinite(logits.grad).all()
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-# LabelSmoothingBCELoss
-# ──────────────────────────────────────────────────────────────────────────────
-
-
 def test_label_smoothing_eps_zero_equals_wbce():
     logits = torch.randn(64)
     y = torch.randint(0, 2, (64,)).float()
@@ -137,25 +116,12 @@ def test_label_smoothing_eps_zero_equals_wbce():
 
 
 def test_label_smoothing_increases_loss():
-    """Label smoothing increases the loss *for a confidently correct model* —
-    the whole point of smoothing is to prevent overconfidence by keeping a
-    small residual mass on the "wrong" answer.
-
-    The earlier formulation of this test (un-seeded random logits + un-seeded
-    random labels) was unreliable: with uncorrelated logits and labels,
-    roughly half of the peaky predictions are confidently *wrong*, and for
-    those the attenuation from (1 − ε/2) actually *lowers* the loss. The net
-    direction depended on whatever global-RNG state the previous test
-    happened to leave — flaky under test-collection order changes.
-
-    Here we construct a well-calibrated peaky model explicitly: logits are
-    large and aligned with the labels, so almost every prediction is
-    confidently correct. In that regime smoothing demonstrably raises the
-    loss, matching the intent of the assertion.
-    """
+    # smoothing only raises loss for *confidently correct* preds. the
+    # earlier un-seeded version was flaky because with random logits half
+    # the peaky preds are wrong, where smoothing *lowers* loss. pin
+    # confidently-correct logits so the assertion is directional.
     torch.manual_seed(0)
     y = torch.randint(0, 2, (1024,)).float()
-    # Confidently correct peaky model: y=1 → +4 logit, y=0 → −4 logit.
     logits = (y * 2.0 - 1.0) * 4.0
     lsm_a = LabelSmoothingBCELoss(epsilon=0.0)
     lsm_b = LabelSmoothingBCELoss(epsilon=0.10)

@@ -1,9 +1,4 @@
-"""Tests for src/calibration.py.
-
-Mostly unit tests with synthetic data so the suite is fast and
-independent of committed training artefacts. A single end-to-end test
-exercises main() against real predictions when available.
-"""
+"""calibration.py — synthetic unit tests + a committed-artefact e2e."""
 
 from __future__ import annotations
 
@@ -22,14 +17,8 @@ if str(SRC) not in sys.path:
 import calibration as cal  # noqa: E402
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Synthetic data — known-calibration fixtures
-# ──────────────────────────────────────────────────────────────────────────────
-
-
 @pytest.fixture
 def well_calibrated():
-    """Synthetic data where P(Y=1|p=x) ≈ x → ECE ≈ 0."""
     rng = np.random.default_rng(0)
     n = 5000
     p = rng.uniform(0.0, 1.0, size=n)
@@ -39,19 +28,13 @@ def well_calibrated():
 
 @pytest.fixture
 def miscalibrated():
-    """Scores are sigmoid(logit / 2) — overconfident by a factor of 2."""
+    # overconfident by ×2: scores are σ(true_logit * 2)
     rng = np.random.default_rng(1)
     n = 5000
     true_logits = rng.normal(0.0, 1.5, size=n)
     y = rng.binomial(1, 1.0 / (1.0 + np.exp(-true_logits))).astype(int)
-    # Report logits scaled by 2 — overconfident.
     p = 1.0 / (1.0 + np.exp(-true_logits * 2.0))
     return y, p
-
-
-# ──────────────────────────────────────────────────────────────────────────────
-# Core metrics
-# ──────────────────────────────────────────────────────────────────────────────
 
 
 def test_ece_zero_for_well_calibrated(well_calibrated):
@@ -70,14 +53,12 @@ def test_mce_bounds(miscalibrated):
     y, p = miscalibrated
     mce = cal.maximum_calibration_error(y, p, n_bins=10)
     ece = cal.expected_calibration_error(y, p, n_bins=10)
-    # MCE >= ECE by construction.
     assert mce >= ece
 
 
 def test_brier_decomposition_identity(miscalibrated):
     y, p = miscalibrated
     d = cal.brier_decomposition(y, p, n_bins=10)
-    # Brier ≈ reliability − resolution + uncertainty (within binning error).
     approx = d.reliability - d.resolution + d.uncertainty
     assert abs(approx - d.brier) < 0.02, (
         f"Brier decomposition identity broken: {approx} vs {d.brier}"
@@ -85,18 +66,12 @@ def test_brier_decomposition_identity(miscalibrated):
 
 
 def test_equal_mass_bins_never_empty():
-    """Equal-mass bins should always cover ≥ 1 sample each."""
     rng = np.random.default_rng(2)
-    p = rng.beta(1, 9, size=1000)  # heavily concentrated near 0
+    p = rng.beta(1, 9, size=1000)
     y = rng.binomial(1, p).astype(int)
     bins = cal._bin_indices(p, n_bins=10, strategy="equal_mass")
     counts = np.bincount(bins)
     assert (counts > 0).all(), f"empty bins found: {counts}"
-
-
-# ──────────────────────────────────────────────────────────────────────────────
-# Calibrators
-# ──────────────────────────────────────────────────────────────────────────────
 
 
 def test_identity_roundtrip(miscalibrated):
@@ -114,19 +89,16 @@ def test_temperature_reduces_ece_on_overconfident(miscalibrated):
     assert ece_cal < ece_raw * 0.7, (
         f"Temperature didn't help: {ece_raw:.4f} -> {ece_cal:.4f}"
     )
-    # Over-confident → T > 1.
     assert ts.temperature_ > 1.0
 
 
 def test_platt_handles_weak_signal():
-    """Platt on pure noise should produce near-base-rate predictions."""
     rng = np.random.default_rng(3)
     n = 2000
     y = rng.binomial(1, 0.3, size=n).astype(int)
-    p = rng.uniform(0.0, 1.0, size=n)  # uninformative
+    p = rng.uniform(0.0, 1.0, size=n)
     platt = cal.PlattScaling().fit(y, p)
     p_cal = platt.transform(p)
-    # Near-base-rate predictions — std should collapse.
     assert abs(p_cal.mean() - y.mean()) < 0.05
     assert p_cal.std() < 0.2
 
@@ -136,7 +108,6 @@ def test_isotonic_monotone(miscalibrated):
     iso = cal.IsotonicCalibrator().fit(y, p)
     grid = np.linspace(0.0, 1.0, 50)
     p_cal = iso.transform(grid)
-    # Monotone non-decreasing.
     assert (np.diff(p_cal) >= -1e-9).all()
 
 
@@ -154,7 +125,6 @@ def test_calibrator_not_fitted_raises():
 
 def test_calibrate_and_score_produces_every_calibrator(miscalibrated):
     y, p = miscalibrated
-    # Use first half as val, second as test.
     n = len(y) // 2
     results = cal.calibrate_and_score(
         y[:n], p[:n], y[n:], p[n:],
@@ -162,12 +132,10 @@ def test_calibrate_and_score_produces_every_calibrator(miscalibrated):
     )
     names = [r.calibrator for r in results]
     assert names == ["identity", "temperature", "platt", "isotonic"]
-    # Identity's ECE must be >= every other calibrator's ECE.
     ece_identity = next(r for r in results if r.calibrator == "identity").metrics["ece_equal_width"]
     for r in results:
         if r.calibrator == "identity":
             continue
-        # Platt/isotonic must beat identity on a miscalibrated sample.
         if r.calibrator in ("platt", "isotonic"):
             assert r.metrics["ece_equal_width"] < ece_identity, (
                 f"{r.calibrator} didn't improve ECE"
@@ -179,11 +147,6 @@ def test_probs_to_logits_invertible():
     z = cal._probs_to_logits(p)
     p_back = cal._sigmoid(z)
     assert np.allclose(p_back, p, atol=1e-6)
-
-
-# ──────────────────────────────────────────────────────────────────────────────
-# End-to-end — main() against committed artefacts.
-# ──────────────────────────────────────────────────────────────────────────────
 
 
 def test_main_writes_artefacts(tmp_path):
@@ -200,4 +163,4 @@ def test_main_writes_artefacts(tmp_path):
     summary = json.loads(
         (tmp_path / "out" / "calibration_summary.json").read_text()
     )
-    assert len(summary) >= 3  # at least identity/temp/platt/isotonic
+    assert len(summary) >= 3

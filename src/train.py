@@ -1,60 +1,6 @@
-"""
-train.py — Supervised training loop for the TabularTransformer.
-
-Implements the full Plan §8 specification:
-
-    Optimiser         AdamW with decoupled weight decay              (§8.1)
-    LR schedule       Linear warmup + cosine decay to ~1% of peak    (§8.2)
-    Gradient clipping max_norm = 1.0                                 (§8.3)
-    Regularisation    Independently-ablatable attn / FFN / residual  (§8.4)
-                      dropout channels on the encoder + class-head
-    Early stopping    On validation AUC-ROC, min_delta-aware         (§8.5)
-    Batching          Batch size 256, optional stratified sampler    (§8.6/§8.8)
-    Two-stage LR      Pretrained encoder at ``encoder_lr_ratio × lr``
-                      when a MTLM checkpoint is loaded               (§8.5.5)
-    Multi-task        Joint BCE + CE loss with λ-weighted PAY_0
-                      forecast head when ``--aux-pay0-lambda > 0``   (§8.6, N5)
-    Logging           Per-epoch CSV + JSON config snapshot           (§8.9)
-
-Every ablation flag in Plan §11 that can be toggled from a training
-invocation is exposed via argparse — one script drives A2 (depth), A3 (heads),
-A4 (d_model), A5 (pool), A7 (temporal pos), A10 (loss family), A11 (focal γ),
-A12 (dropout), A19 (data fraction), A22 (temporal decay), plus the N5
-auxiliary objective (A16).
-
-CLI example
------------
-
-.. code-block:: bash
-
-    poetry run python src/train.py \\
-        --seed 42 --d-model 32 --n-heads 4 --n-layers 2 \\
-        --loss focal --focal-gamma 2.0 --focal-alpha balanced \\
-        --lr 3e-4 --weight-decay 1e-5 \\
-        --warmup-frac 0.10 --min-lr-frac 0.01 \\
-        --epochs 200 --patience 20 --batch-size 256 \\
-        --stratified-batches \\
-        --temporal-decay-mode scalar
-
-Outputs (under ``--output-dir``, defaults to
-``results/transformer/seed_{seed}/``):
-
-    config.json            → resolved argparse + runtime metadata + param count
-    train_log.csv          → per-epoch train/val metrics, LR, grad norm, wall-clock
-    best.pt                → checkpoint bundle (+ .weights + .meta.json sidecars)
-    train_metrics.json     → final metrics @ τ=0.5 on the training set
-                             (with best-epoch weights restored)
-    train_predictions.npz  → (y_true, y_prob, y_pred) on train — for overfit
-                             diagnostics / train–val–test parity plots
-    val_metrics.json       → final metrics @ τ=0.5 on the validation set
-    val_predictions.npz    → (y_true, y_prob, y_pred) on val — for
-                             val-threshold-picking in Phase 8 evaluate.py
-    test_metrics.json      → final metrics @ τ=0.5 + threshold sweep + epochs
-                             trained + best_epoch + training_seconds
-    test_predictions.npz   → (y_true, y_prob, y_pred) for evaluate.py / interpret.py
-    test_attn_weights.npz  → per-layer attention on the test set for Phase 10
-                             rollout (skip with ``--no-save-attn``)
-"""
+"""Supervised training for TabularTransformer. AdamW + cosine-warmup,
+focal / WBCE / label-smoothing, early stop on val AUC-ROC. Two-group LR
+when fine-tuning from an MTLM encoder."""
 
 from __future__ import annotations
 
@@ -87,8 +33,7 @@ from torch.optim import AdamW
 from torch.optim.lr_scheduler import LambdaLR
 from torch.utils.data import DataLoader
 
-# Make ``src/`` importable when invoked either as ``python src/train.py`` or
-# as ``python -m src.train``.
+# src/ on sys.path so `python src/train.py` and `python -m src.train` both work
 _HERE = Path(__file__).resolve()
 _SRC = _HERE.parent
 _REPO = _HERE.parent.parent
@@ -123,12 +68,7 @@ from utils import (  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
-ECE_N_BINS = 15  # Plan §13.2
-
-
-# ──────────────────────────────────────────────────────────────────────────────
-# Argparse
-# ──────────────────────────────────────────────────────────────────────────────
+ECE_N_BINS = 15
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -137,7 +77,6 @@ def _build_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
 
-    # Reproducibility + output
     g = p.add_argument_group("reproducibility / output")
     g.add_argument("--seed", type=int, default=42)
     g.add_argument(
@@ -148,32 +87,27 @@ def _build_parser() -> argparse.ArgumentParser:
     g.add_argument("--determinism", action="store_true",
                    help="Enable torch.use_deterministic_algorithms(warn_only=True).")
 
-    # Model architecture (Plan §6.11 defaults)
     g = p.add_argument_group("model architecture")
     g.add_argument("--d-model", type=int, default=32)
     g.add_argument("--n-heads", type=int, default=4)
     g.add_argument("--n-layers", type=int, default=2)
     g.add_argument("--d-ff", type=int, default=None,
                    help="FFN hidden dim. Defaults to 4 * d_model.")
-    g.add_argument("--pool", choices=["cls", "mean", "max"], default="cls",
-                   help="Plan §6.7 / Ablation A5.")
-    g.add_argument("--use-temporal-pos", action="store_true",
-                   help="Plan §5.4 / Ablation A7.")
+    g.add_argument("--pool", choices=["cls", "mean", "max"], default="cls")
+    g.add_argument("--use-temporal-pos", action="store_true")
     g.add_argument(
         "--temporal-decay-mode",
         choices=["off", "scalar", "per_head"],
         default="off",
-        help="Plan §6.12.2 (Novelty N3) / Ablation A22.",
     )
     g.add_argument(
         "--feature-group-bias-mode",
         choices=["off", "scalar", "per_head"],
         default="off",
-        help="Plan §6.12.1 (Novelty N2) / Ablation A21 — feature-group "
-             "attention bias. Groups: CLS / demographic / PAY / BILL_AMT / PAY_AMT.",
+        help="Feature-group attention bias across CLS / demographic / PAY / "
+             "BILL_AMT / PAY_AMT.",
     )
 
-    # Dropout channels (Ablation A12)
     g = p.add_argument_group("regularisation")
     g.add_argument("--dropout", type=float, default=0.1)
     g.add_argument("--attn-dropout", type=float, default=None)
@@ -181,25 +115,20 @@ def _build_parser() -> argparse.ArgumentParser:
     g.add_argument("--residual-dropout", type=float, default=None)
     g.add_argument("--classification-dropout", type=float, default=0.1)
 
-    # Primary loss (Ablations A10 / A11)
     g = p.add_argument_group("loss")
     g.add_argument("--loss", choices=["focal", "wbce", "label-smoothing"],
                    default="focal")
-    g.add_argument("--focal-gamma", type=float, default=2.0,
-                   help="Plan §7.2 / Ablation A11.")
+    g.add_argument("--focal-gamma", type=float, default=2.0)
     g.add_argument(
         "--focal-alpha", type=str, default="balanced",
-        help="'balanced' / scalar α_pos in [0, 1] / tuple '(α_pos, α_neg)' / 'none'.",
+        help="'balanced' / scalar alpha_pos in [0, 1] / tuple '(alpha_pos, alpha_neg)' / 'none'.",
     )
-    g.add_argument("--label-smoothing-eps", type=float, default=0.05,
-                   help="Plan §7.3 / Ablation (optional).")
+    g.add_argument("--label-smoothing-eps", type=float, default=0.05)
 
-    # Multi-task (N5 / A16)
     g.add_argument("--aux-pay0-lambda", type=float, default=0.0,
-                   help="Joint-loss weight λ on the PAY_0 forecast auxiliary "
-                        "(Plan §8.6 / Novelty N5 / Ablation A16). 0 disables.")
+                   help="Joint-loss weight on the PAY_0 forecast auxiliary head. "
+                        "0 disables the aux head entirely.")
 
-    # Optimiser (Plan §8.1-§8.3)
     g = p.add_argument_group("optimisation")
     g.add_argument("--lr", type=float, default=3e-4)
     g.add_argument("--weight-decay", type=float, default=1e-5)
@@ -208,61 +137,46 @@ def _build_parser() -> argparse.ArgumentParser:
     g.add_argument("--beta2", type=float, default=0.999)
     g.add_argument("--eps", type=float, default=1e-8)
     g.add_argument("--warmup-frac", type=float, default=0.10,
-                   help="Plan §8.2: 5–10%% warmup. Default 10%%.")
+                   help="Fraction of total steps used for linear warmup.")
     g.add_argument("--min-lr-frac", type=float, default=0.01,
                    help="Cosine floor as a fraction of peak LR.")
 
-    # Training schedule (Plan §8.6)
     g = p.add_argument_group("training schedule")
     g.add_argument("--epochs", type=int, default=200)
     g.add_argument("--patience", type=int, default=20,
-                   help="Early stopping patience on val AUC-ROC. Plan §8.5.")
+                   help="Early stopping patience on val AUC-ROC.")
     g.add_argument("--min-delta", type=float, default=1e-4)
     g.add_argument("--batch-size", type=int, default=256)
     g.add_argument("--stratified-batches", action="store_true",
-                   help="Plan §8.8 — every batch contains ~22.1%% positives.")
+                   help="Every batch contains ~22.1%% positives.")
     g.add_argument("--num-workers", type=int, default=0)
 
-    # Fine-tuning after MTLM (Plan §8.5.5)
     g = p.add_argument_group("fine-tuning from MTLM pretraining")
     g.add_argument("--pretrained-encoder", type=str, default=None,
-                   help="Path to a MTLM pretrain .pt (Plan §8.5.5). When set, "
-                        "the encoder+embedding weights are loaded strict=False "
-                        "into the fresh model; the classification head stays "
-                        "at fresh init.")
+                   help="Path to a MTLM pretrain .pt artefact. Loaded strict=False "
+                        "so the classification head stays at fresh init.")
     g.add_argument("--encoder-lr-ratio", type=float, default=0.2,
-                   help="Pretrained encoder LR = encoder_lr_ratio × --lr.")
+                   help="Pretrained encoder LR = encoder_lr_ratio * --lr.")
     g.add_argument("--trust-checkpoint", action="store_true",
                    help="Only pass for checkpoints YOU produced. Enables the "
-                        "full pickle load path of torch.load (required to "
-                        "restore optimiser state); default is weights-only.")
+                        "full pickle load path of torch.load; default is weights-only.")
 
-    # Ablation A19 — scaling curve
     g = p.add_argument_group("data scaling")
     g.add_argument("--data-frac", type=float, default=1.0,
-                   help="Fraction of the training split to use (Ablation A19).")
+                   help="Fraction of the training split to use (scaling-curve ablation).")
 
-    # Artefact control
     g = p.add_argument_group("artefact control")
     g.add_argument("--no-save-attn", action="store_true",
-                   help="Skip writing test_attn_weights.npz (saves ~30 MB per run).")
-    g.add_argument("--no-save-predictions", action="store_true",
-                   help="Skip writing test_predictions.npz.")
+                   help="Skip writing test_attn_weights.npz (~30 MB per run).")
+    g.add_argument("--no-save-predictions", action="store_true")
     g.add_argument("--log-every", type=int, default=1,
-                   help="Print a log line every N epochs (file log is per-epoch).")
+                   help="Print a log line every N epochs; the CSV log is per-epoch.")
 
-    # CI / smoke test
     g = p.add_argument_group("debug")
     g.add_argument("--smoke-test", action="store_true",
-                   help="Run 2 epochs on ~500 training rows then exit. "
-                        "For CI; skips attention-weight dump.")
+                   help="Run 2 epochs on ~500 training rows then exit.")
 
     return p
-
-
-# ──────────────────────────────────────────────────────────────────────────────
-# Helpers
-# ──────────────────────────────────────────────────────────────────────────────
 
 
 def _git_sha(default: str = "unknown") -> str:
@@ -285,13 +199,12 @@ def _resolve_output_dir(args: argparse.Namespace) -> Path:
 
 
 def _resolve_focal_alpha(spec: str) -> Any:
-    """Parse ``--focal-alpha`` into the shape FocalLoss expects."""
+    """parse --focal-alpha into whatever FocalLoss wants."""
     spec = spec.strip().lower()
     if spec == "balanced":
         return "balanced"
     if spec == "none":
         return None
-    # Tuple form: "(0.75, 0.25)" or "0.75,0.25".
     if spec.startswith("(") and spec.endswith(")"):
         spec = spec[1:-1]
     if "," in spec:
@@ -306,7 +219,7 @@ def _resolve_focal_alpha(spec: str) -> Any:
     except ValueError as exc:
         raise argparse.ArgumentTypeError(
             f"--focal-alpha must be 'balanced', 'none', a scalar in [0,1], or "
-            f"a tuple '(α_pos, α_neg)'; got {spec!r}"
+            f"a tuple '(alpha_pos, alpha_neg)'; got {spec!r}"
         ) from exc
 
 
@@ -334,9 +247,6 @@ def _load_splits(
 
     def _stratified_sample(df: pd.DataFrame, *, n: Optional[int] = None,
                            frac: Optional[float] = None) -> pd.DataFrame:
-        """Stratified sample from a DataFrame by the ``DEFAULT`` column,
-        preserving class ratios. Uses ``include_groups=False`` so pandas does
-        not emit a FutureWarning about grouping-column behaviour."""
         pieces = []
         for _, group in df.groupby("DEFAULT", group_keys=False):
             if n is not None:
@@ -348,13 +258,13 @@ def _load_splits(
         return pd.concat(pieces, ignore_index=True)
 
     if smoke_test:
-        # Keep enough positives for AUC to be defined.
+        # need enough positives for AUC to be defined
         train_df = _stratified_sample(train_df, n=250)
         val_df   = _stratified_sample(val_df,   n=100)
         test_df  = _stratified_sample(test_df,  n=100)
     elif data_frac < 1.0:
         train_df = _stratified_sample(train_df, frac=data_frac)
-        logger.info("Ablation A19: reduced train to %.0f%% → %d rows",
+        logger.info("Data-frac ablation: reduced train to %.0f%% -> %d rows",
                     data_frac * 100, len(train_df))
 
     return train_df, val_df, test_df, meta
@@ -372,19 +282,13 @@ def _to_device(batch: Dict[str, Any], device: torch.device) -> Dict[str, Any]:
     return out
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-# LR schedule
-# ──────────────────────────────────────────────────────────────────────────────
-
-
 def build_cosine_warmup_schedule(
     optim: torch.optim.Optimizer,
     warmup_steps: int,
     total_steps: int,
     min_lr_frac: float = 0.01,
 ) -> LambdaLR:
-    """Linear warmup from 0 → peak over ``warmup_steps``; cosine decay to
-    ``min_lr_frac * peak`` over the remainder. Plan §8.2."""
+    """linear warmup 0→peak, then cosine to min_lr_frac·peak."""
     if total_steps <= 0:
         raise ValueError(f"total_steps must be > 0, got {total_steps}")
     warmup_steps = max(0, int(warmup_steps))
@@ -401,12 +305,8 @@ def build_cosine_warmup_schedule(
     return LambdaLR(optim, lr_lambda)
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Loss factory
-# ──────────────────────────────────────────────────────────────────────────────
-
-
 def build_primary_loss(args: argparse.Namespace, y_train: torch.Tensor) -> nn.Module:
+    """dispatch on --loss."""
     if args.loss == "wbce":
         return WeightedBCELoss(pos_weight=compute_pos_weight(y_train))
 
@@ -416,20 +316,14 @@ def build_primary_loss(args: argparse.Namespace, y_train: torch.Tensor) -> nn.Mo
             pos_weight=compute_pos_weight(y_train),
         )
 
-    # Default — focal (Plan §7.2 primary).
     alpha = _resolve_focal_alpha(args.focal_alpha)
     if alpha == "balanced":
-        alpha = balanced_alpha(y_train)  # (α_pos, α_neg)
+        alpha = balanced_alpha(y_train)
     return FocalLoss(gamma=args.focal_gamma, alpha=alpha)
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Metrics
-# ──────────────────────────────────────────────────────────────────────────────
-
-
 def compute_ece(y_true: np.ndarray, y_prob: np.ndarray, n_bins: int = ECE_N_BINS) -> float:
-    """Expected Calibration Error with equal-width bins (Plan §13.2)."""
+    """ECE with equal-width bins."""
     y_true = y_true.astype(float)
     bin_edges = np.linspace(0.0, 1.0, n_bins + 1)
     ece = 0.0
@@ -463,6 +357,7 @@ def compute_classification_metrics(
     threshold: float = 0.5,
     prefix: str = "",
 ) -> Dict[str, float]:
+    """AUC-ROC / AUC-PR / F1 / acc / P / R / Brier / ECE at threshold τ."""
     y_true_int = y_true.astype(int)
     y_pred = (y_prob >= threshold).astype(int)
     return {
@@ -477,11 +372,6 @@ def compute_classification_metrics(
     }
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Evaluation / training loops
-# ──────────────────────────────────────────────────────────────────────────────
-
-
 @torch.no_grad()
 def evaluate_on_loader(
     model: nn.Module,
@@ -490,9 +380,7 @@ def evaluate_on_loader(
     *,
     collect_attn: bool = False,
 ) -> Dict[str, Any]:
-    """One forward pass over a loader. Returns a dict with per-sample
-    predictions, ground truth, metrics, and (optionally) stacked attention
-    weights per layer."""
+    """one eval pass → {y_true, y_prob, metrics, [attn_weights]}."""
     model.eval()
     ys: List[np.ndarray] = []
     ps: List[np.ndarray] = []
@@ -534,6 +422,7 @@ def train_one_epoch(
     aux_loss_fn: Optional[nn.Module] = None,
     aux_lambda: float = 0.0,
 ) -> Dict[str, float]:
+    """one epoch. total = primary + λ·aux when aux_lambda > 0."""
     model.train()
     primary_losses: List[float] = []
     aux_losses: List[float] = []
@@ -546,7 +435,7 @@ def train_one_epoch(
         loss_primary = primary_loss_fn(out["logit"], batch["label"])
         loss = loss_primary
         if aux_loss_fn is not None and aux_lambda > 0 and "aux_pay0_logits" in out:
-            # pay_raw is already shifted into [0, 10]; PAY_0 is index 0.
+            # pay_raw already shifted to [0, 10]; col 0 = PAY_0
             target_pay0 = batch["pay_raw"][:, 0].long()
             loss_aux = aux_loss_fn(out["aux_pay0_logits"], target_pay0)
             loss = loss_primary + aux_lambda * loss_aux
@@ -570,16 +459,13 @@ def train_one_epoch(
     }
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Optimiser construction (two-group when a pretrained encoder is loaded)
-# ──────────────────────────────────────────────────────────────────────────────
-
-
 def build_optimizer(
     model: TabularTransformer,
     args: argparse.Namespace,
     pretrained: bool,
 ) -> AdamW:
+    """AdamW. Two param groups on the fine-tune path: head at --lr,
+    encoder at lr·encoder_lr_ratio."""
     betas = (args.beta1, args.beta2)
     if not pretrained:
         return AdamW(
@@ -590,11 +476,6 @@ def build_optimizer(
             weight_decay=args.weight_decay,
         )
 
-    # Two-group: fresh head at peak LR, pretrained encoder (+ embedding +
-    # novelty bias modules) at the smaller ``lr * encoder_lr_ratio``. The
-    # TabularTransformer.get_head_params / get_encoder_params helpers are
-    # the canonical source for the head-vs-encoder split and stay correct
-    # as new sub-modules (e.g. FeatureGroupBias) land.
     head_params = model.get_head_params()
     encoder_params = model.get_encoder_params()
 
@@ -619,11 +500,6 @@ def build_optimizer(
     )
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Main
-# ──────────────────────────────────────────────────────────────────────────────
-
-
 def main(argv: Optional[List[str]] = None) -> int:
     parser = _build_parser()
     args = parser.parse_args(argv)
@@ -633,13 +509,13 @@ def main(argv: Optional[List[str]] = None) -> int:
     device = get_device(args.device)
 
     logger.info("=" * 72)
-    logger.info("TabularTransformer supervised training — seed %d", args.seed)
+    logger.info("TabularTransformer supervised training - seed %d", args.seed)
     logger.info("Device: %s", describe_device(device))
     logger.info("=" * 72)
 
     output_dir = _resolve_output_dir(args)
 
-    # ── Data ──────────────────────────────────────────────────────────────
+    # data
     train_df, val_df, test_df, meta = _load_splits(
         seed=args.seed, data_frac=args.data_frac, smoke_test=args.smoke_test,
     )
@@ -670,7 +546,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         num_workers=args.num_workers,
     )
 
-    # ── Model ─────────────────────────────────────────────────────────────
+    # model
     aux_enabled = args.aux_pay0_lambda > 0
     model = TabularTransformer(
         d_model=args.d_model,
@@ -693,9 +569,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         },
     ).to(device)
     n_params = model.count_parameters()
-    logger.info("Model: %s params — %s", format_parameter_count(n_params), str(model)[:120])
+    logger.info("Model: %s params - %s", format_parameter_count(n_params), str(model)[:120])
 
-    # Optional MTLM fine-tuning starting point (Plan §8.5.5).
     pretrained = args.pretrained_encoder is not None
     if pretrained:
         model.load_pretrained_encoder(
@@ -705,18 +580,18 @@ def main(argv: Optional[List[str]] = None) -> int:
             map_location=device,
         )
 
-    # ── Losses ────────────────────────────────────────────────────────────
+    # losses
     y_train = train_ds.tensors["labels"]
     primary_loss_fn = build_primary_loss(args, y_train).to(device)
     aux_loss_fn: Optional[nn.Module] = None
     if aux_enabled:
         aux_loss_fn = nn.CrossEntropyLoss().to(device)
         logger.info(
-            "Multi-task objective (N5): λ=%.2f on PAY_0 CE (11 classes)",
+            "Multi-task objective: lambda=%.2f on PAY_0 CE (11 classes)",
             args.aux_pay0_lambda,
         )
 
-    # ── Optimiser + schedule ──────────────────────────────────────────────
+    # opt + sched
     optimizer = build_optimizer(model, args, pretrained=pretrained)
     steps_per_epoch = len(train_loader)
     total_steps = max(1, args.epochs * steps_per_epoch)
@@ -728,7 +603,7 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     early = EarlyStopping(patience=args.patience, mode="max", min_delta=args.min_delta)
 
-    # ── Config snapshot ───────────────────────────────────────────────────
+    # config snapshot
     config = {
         **vars(args),
         "param_count": n_params,
@@ -744,12 +619,12 @@ def main(argv: Optional[List[str]] = None) -> int:
         "pos_weight":   float(compute_pos_weight(y_train)),
     }
     (output_dir / "config.json").write_text(json.dumps(config, indent=2, default=str))
-    logger.info("Config snapshot → %s", output_dir / "config.json")
+    logger.info("Config snapshot -> %s", output_dir / "config.json")
 
-    # ── Training loop ─────────────────────────────────────────────────────
+    # train
     log_rows: List[Dict[str, Any]] = []
     start = time.perf_counter()
-    logger.info("Starting training: %d epochs (≤ %d steps, warmup %d steps).",
+    logger.info("Starting training: %d epochs (<= %d steps, warmup %d steps).",
                 args.epochs, total_steps, warmup_steps)
 
     for epoch in range(1, args.epochs + 1):
@@ -766,7 +641,8 @@ def main(argv: Optional[List[str]] = None) -> int:
 
         log_row = {
             "epoch": epoch,
-            "lr": optimizer.param_groups[-1]["lr"],  # head LR when two-group, else the only group
+            # two-group → last group is head; single-group → only group
+            "lr": optimizer.param_groups[-1]["lr"],
             **train_stats,
             **{f"val_{k}": v for k, v in val_metrics.items()},
             "epoch_s": elapsed,
@@ -785,7 +661,7 @@ def main(argv: Optional[List[str]] = None) -> int:
 
         if early.step(val_metrics["auc_roc"], state=model.state_dict()):
             logger.info(
-                "Early stopping at epoch %d — best val AUC-ROC %.4f at epoch %d",
+                "Early stopping at epoch %d - best val AUC-ROC %.4f at epoch %d",
                 epoch, early.best_score, early.best_epoch,
             )
             break
@@ -793,21 +669,17 @@ def main(argv: Optional[List[str]] = None) -> int:
     total_elapsed = time.perf_counter() - start
     logger.info("Training complete in %.1fs (%d epochs).", total_elapsed, epoch)
 
-    # Restore best-model weights.
     if early.best_state is not None:
         model.load_state_dict(early.best_state)
         logger.info("Restored best-epoch weights (epoch %d, val AUC-ROC %.4f).",
                     early.best_epoch, early.best_score)
 
-    # ── Write training log ────────────────────────────────────────────────
     log_df = pd.DataFrame(log_rows)
     log_df.to_csv(output_dir / "train_log.csv", index=False)
-    logger.info("Training log → %s", output_dir / "train_log.csv")
+    logger.info("Training log -> %s", output_dir / "train_log.csv")
 
-    # ── Final evaluation on all three splits (with best-epoch weights) ────
-    # An eval-mode loader over the *train* split (no shuffling / stratified
-    # sampling) so the reported train numbers reflect the fitted model's
-    # predictions, not the in-training SGD snapshots.
+    # --- final eval on all splits with best-epoch weights ---
+    # re-wrap train in val mode so numbers reflect fitted model, not mid-SGD
     final_train_loader = make_loader(
         train_ds, batch_size=args.batch_size, mode="val",
         num_workers=args.num_workers,
@@ -821,14 +693,12 @@ def main(argv: Optional[List[str]] = None) -> int:
     for split, ev in (("Train", train_eval), ("Val", val_eval), ("Test", test)):
         m = ev["metrics"]
         logger.info(
-            "%-5s metrics @ τ=0.5: AUC-ROC %.4f | AUC-PR %.4f | F1 %.4f | "
+            "%-5s metrics @ tau=0.5: AUC-ROC %.4f | AUC-PR %.4f | F1 %.4f | "
             "acc %.4f | ECE %.4f | Brier %.4f",
             split, m["auc_roc"], m["auc_pr"], m["f1"],
             m["accuracy"], m["ece"], m["brier"],
         )
 
-    # Supplementary threshold sweep (test only) — helpful for downstream
-    # evaluate.py / calibration / stat tests in Phase 8+.
     threshold_sweep = {
         f"tau_{t:.2f}": compute_classification_metrics(
             test["y_true"], test["y_prob"], threshold=t, prefix="",
@@ -837,7 +707,6 @@ def main(argv: Optional[List[str]] = None) -> int:
     }
 
     def _write_split(split: str, ev: Dict[str, Any], *, include_test_extras: bool) -> None:
-        """Persist {split}_metrics.json (+ predictions npz) under output_dir."""
         payload: Dict[str, Any] = {
             "split": split,
             "threshold": 0.5,
@@ -875,7 +744,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                for i, a in enumerate(test["attn_weights"])},
         )
 
-    # ── Checkpoint ────────────────────────────────────────────────────────
+    # chkpt
     save_checkpoint(
         output_dir / "best.pt",
         model,

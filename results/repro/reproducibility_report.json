@@ -55,19 +55,29 @@
     {
       "name": "git_clean",
       "passed": true,
-      "detail": "10 tracked changes",
+      "detail": "51 tracked changes",
       "metadata": {
         "dirty_files": [
           " M CHANGELOG.md",
           " M PROJECT_PLAN.md",
           " M README.md",
+          " M data/processed/SPLIT_HASHES.md",
+          " M docs/DATA_SHEET.md",
           " M docs/MODEL_CARD.md",
           " M docs/REPRODUCIBILITY.md",
           " M results/repro/reproducibility_report.json",
-          " M src/repro.py",
-          " M src/uncertainty.py",
-          " M tests/test_repro.py",
-          "?? data/processed/SPLIT_HASHES.md"
+          " M src/attention.py",
+          " M src/calibration.py",
+          " M src/data_preprocessing.py",
+          " M src/data_sources.py",
+          " M src/dataset.py",
+          " M src/eda.py",
+          " M src/embedding.py",
+          " M src/evaluate.py",
+          " M src/fairness.py",
+          " M src/losses.py",
+          " M src/model.py",
+          " M src/mtlm.py"
         ],
         "is_clean": false
       }

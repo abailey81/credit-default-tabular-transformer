@@ -1,7 +1,4 @@
-"""Tests for src/rf_predictions.py — the small helper that regenerates
-RF per-row probabilities for use by the calibration / fairness /
-significance modules.
-"""
+"""rf_predictions.py — regenerates RF per-row probabilities from rf_config.json."""
 
 from __future__ import annotations
 
@@ -43,8 +40,6 @@ def test_coerce_best_params_passes_through_non_strings():
 
 
 def test_fit_and_predict_tiny(tmp_path):
-    """End-to-end on a tiny synthetic dataset — proves the wiring is
-    correct without depending on committed data."""
     rng = np.random.default_rng(0)
     n = 400
     cols = ["LIMIT_BAL", "AGE", "PAY_0", "PAY_AMT1", "BILL_AMT1", "DEFAULT"]
@@ -101,12 +96,11 @@ def test_save_predictions_writes_files(tmp_path):
 
 
 def test_main_against_committed_data():
-    """Only run if committed engineered CSVs and rf_config are present."""
     cfg = REPO / "results" / "rf_config.json"
     proc = REPO / "data" / "processed"
     if not (cfg.is_file() and (proc / "train_engineered.csv").is_file()):
         pytest.skip("no committed rf_config or engineered data")
-    # Run into a scratch directory rather than overwriting results/rf.
+    # scratch dir — leave committed results/rf alone
     import tempfile
     with tempfile.TemporaryDirectory() as tmp:
         rc = rf.main([

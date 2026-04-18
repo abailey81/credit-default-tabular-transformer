@@ -1,8 +1,8 @@
-"""Tests for the new evaluate.py pieces — ensemble_run and the
-rf-full-predictions branch — that this branch adds on top of PR #12."""
+"""evaluate.py — ensemble_run + the rf-full-predictions branch."""
 
 from __future__ import annotations
 
+import logging
 import sys
 from pathlib import Path
 
@@ -52,9 +52,7 @@ def test_ensemble_run_arithmetic_matches_plain_mean(synthetic_runs):
 def test_ensemble_run_geometric_sane(synthetic_runs):
     result = ev.ensemble_run(synthetic_runs, mode="geometric",
                              display_name="ens_geo")
-    # Geometric-mean-logit probability is bounded like any probability.
     assert ((result["y_prob"] >= 0) & (result["y_prob"] <= 1)).all()
-    # Should typically differ from arithmetic when seeds disagree.
     arith = ev.ensemble_run(synthetic_runs, mode="arithmetic")
     assert not np.allclose(result["y_prob"], arith["y_prob"])
 
@@ -67,7 +65,7 @@ def test_ensemble_run_rejects_mismatched_y_true(synthetic_runs):
     bad = [dict(synthetic_runs[0])]
     mismatch = dict(synthetic_runs[1])
     mismatch["y_true"] = synthetic_runs[1]["y_true"].copy()
-    mismatch["y_true"][0] ^= 1  # flip one label
+    mismatch["y_true"][0] ^= 1
     bad.append(mismatch)
     with pytest.raises(ValueError):
         ev.ensemble_run(bad)
@@ -87,9 +85,26 @@ def test_load_rf_from_predictions_returns_none_when_missing(tmp_path):
     assert ev.load_rf_from_predictions(tmp_path / "no_such") is None
 
 
+def test_aggregate_runs_warns_and_propagates_on_nan(synthetic_runs, caplog):
+    # NaN metrics must propagate AND warn — a silent nanmean would hide
+    # which run and which metric went bad
+    runs = [dict(r) for r in synthetic_runs]
+    runs[0] = dict(runs[0])
+    runs[0]["metrics"] = dict(runs[0]["metrics"])
+    runs[0]["metrics"]["auc_roc"] = float("nan")
+
+    with caplog.at_level(logging.WARNING, logger="evaluate"):
+        agg = ev.aggregate_runs(runs)
+
+    assert np.isnan(agg["mean"]["auc_roc"])
+    messages = [rec.getMessage() for rec in caplog.records]
+    assert any("NaN auc_roc" in m and runs[0]["run_name"] in m for m in messages), (
+        f"Expected a NaN-auc_roc warning mentioning {runs[0]['run_name']!r}; "
+        f"got: {messages}"
+    )
+
+
 def test_load_rf_from_predictions_loads_committed_rf():
-    """Integration check against the rf_predictions artefact this
-    branch produces — runs only if rf_predictions.py has been called."""
     rf = REPO / "results" / "rf"
     if not (rf / "test_predictions.npz").is_file():
         pytest.skip("no rf prediction artefact")

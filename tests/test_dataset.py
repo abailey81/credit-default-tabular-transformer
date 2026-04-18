@@ -1,4 +1,4 @@
-"""Tests for src/dataset.py — StratifiedBatchSampler and make_loader."""
+"""StratifiedBatchSampler + make_loader."""
 
 from __future__ import annotations
 
@@ -14,17 +14,12 @@ from dataset import (  # noqa: E402
 from tokenizer import MTLMCollator
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-# StratifiedBatchSampler
-# ──────────────────────────────────────────────────────────────────────────────
-
-
 def _labels(n_pos: int, n_neg: int) -> torch.Tensor:
     return torch.cat([torch.ones(n_pos), torch.zeros(n_neg)]).long()
 
 
 def test_stratified_batch_preserves_rate():
-    labels = _labels(220, 780)  # 22% positive, 1000 rows
+    labels = _labels(220, 780)
     sampler = StratifiedBatchSampler(
         labels=labels, batch_size=100, drop_last=True, shuffle=True,
         generator=torch.Generator().manual_seed(0),
@@ -63,23 +58,14 @@ def test_stratified_batch_rejects_single_class():
 
 
 def test_stratified_batch_rejects_small_batch_size():
-    # With 1% positive rate and batch_size=2, round(2*0.01) = 0 → k_neg = 2 > 0
-    # but k_pos = 1 (via max). For positive rate too low to fit with batch_size,
-    # k_neg could be 0. Let's force it:
     with pytest.raises(ValueError):
         StratifiedBatchSampler(labels=_labels(99, 1), batch_size=2)
 
 
 def test_stratified_batch_len():
-    labels = _labels(100, 400)  # 500 total, 20% positive
+    labels = _labels(100, 400)
     sampler = StratifiedBatchSampler(labels=labels, batch_size=50, drop_last=True)
-    # k_pos = 10, k_neg = 40 → min(100//10, 400//40) = 10
     assert len(sampler) == 10
-
-
-# ──────────────────────────────────────────────────────────────────────────────
-# default_collate
-# ──────────────────────────────────────────────────────────────────────────────
 
 
 def test_default_collate_shapes(small_dataset):
@@ -90,11 +76,6 @@ def test_default_collate_shapes(small_dataset):
     assert batch["pay_severities"].shape == (8, 6)
     assert batch["label"].shape == (8,)
     assert batch["cat_indices"]["SEX"].shape == (8,)
-
-
-# ──────────────────────────────────────────────────────────────────────────────
-# make_loader
-# ──────────────────────────────────────────────────────────────────────────────
 
 
 def test_make_loader_train_mode(small_dataset):
@@ -135,9 +116,7 @@ def test_make_loader_rejects_unknown_mode(small_dataset):
 
 
 def test_make_loader_stratified_with_val_ignored(small_dataset):
-    """stratified=True on mode='val' should silently fall back to plain sampling."""
     loader = make_loader(
         small_dataset, batch_size=32, mode="val", stratified=True, seed=0
     )
-    # Should run without raising.
     _ = next(iter(loader))

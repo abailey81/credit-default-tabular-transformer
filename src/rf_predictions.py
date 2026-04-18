@@ -1,45 +1,6 @@
-"""
-rf_predictions.py — Regenerate the tuned Random-Forest's per-row test
-probabilities using the hyperparameters already committed in
-``results/rf_config.json``, and persist them in the same
-``test_predictions.npz`` layout ``train.py`` uses for the transformer.
-
-Motivation
-----------
-The original ``random_forest.py`` pipeline writes aggregate metrics
-(``results/rf_metrics.csv``) and tuned hyperparameters
-(``results/rf_config.json``) but not the raw test-set probability vector.
-Several downstream analyses in Phase 11/12 *need* the probability vector:
-
-    * Phase 11  (calibration)   → post-hoc ECE/Brier on RF predictions.
-    * Phase 12  (significance)  → DeLong AUC-difference, McNemar on paired
-                                  binary predictions, paired-bootstrap ΔAUC.
-    * Phase 11  (reliability)   → the transformer-vs-RF reliability plot
-                                  in the report's §4 needs RF bin rates.
-
-Rather than re-running the expensive 200-iter RandomizedSearchCV from
-``random_forest.py``, we fit the *already-tuned* final estimator on the
-train+val concatenation (matching the original pipeline's final-fit) and
-score the committed test split. Output is written in the same shape as
-``train.py`` so every Phase 11/12 module can consume both models through
-a single loader.
-
-Outputs
--------
-    results/rf/test_predictions.npz   — arrays y_true, y_prob, y_pred.
-    results/rf/test_metrics.json      — Brier + ECE + kappa + specificity +
-                                        every metric ``train.py`` produces,
-                                        so ``evaluate.py`` can read it
-                                        with the same loader.
-
-CLI
----
-    poetry run python src/rf_predictions.py
-    poetry run python src/rf_predictions.py --config results/rf_config.json \\
-        --output-dir results/rf
-
-References: Plan §9 (RF benchmark), §10 (evaluation).
-"""
+"""Refit tuned RF from rf_config.json, score test split, dump test_predictions.npz
++ test_metrics.json in the same layout train.py uses. random_forest.py only
+writes aggregates — calibration/significance need the per-row probs."""
 
 from __future__ import annotations
 
@@ -62,13 +23,20 @@ from train import compute_classification_metrics  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
+__all__ = [
+    "fit_and_predict",
+    "save_predictions",
+    "main",
+    "DEFAULT_RANDOM_STATE",
+    "TARGET",
+]
+
 DEFAULT_RANDOM_STATE = 42
 TARGET = "DEFAULT"
 
 
 def _coerce_best_params(raw: Dict[str, Any]) -> Dict[str, Any]:
-    """``rf_config.json`` stringifies every hyperparameter. Map back to the
-    scalars sklearn expects — ints, floats, None, or unchanged strings."""
+    """rf_config.json stores params as strings → coerce back to sklearn types."""
     out: Dict[str, Any] = {}
     for k, v in raw.items():
         if not isinstance(v, str):
@@ -83,7 +51,7 @@ def _coerce_best_params(raw: Dict[str, Any]) -> Dict[str, Any]:
             else:
                 out[k] = int(v)
         except ValueError:
-            out[k] = v  # leave as string (e.g. "sqrt", "entropy")
+            out[k] = v  # "sqrt", "entropy", etc.
     return out
 
 
@@ -105,7 +73,7 @@ def fit_and_predict(
     df_val = pd.read_csv(val_csv)
     df_test = pd.read_csv(test_csv)
 
-    # Match the original pipeline: final refit on train+val.
+    # final fit on train+val (matches original pipeline)
     df_fit = pd.concat([df_train, df_val], ignore_index=True)
     X_fit = df_fit.drop(columns=[TARGET]).values
     y_fit = df_fit[TARGET].astype(int).values

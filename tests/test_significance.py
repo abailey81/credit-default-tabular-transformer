@@ -1,9 +1,4 @@
-"""Tests for src/significance.py.
-
-Covers McNemar, DeLong, paired bootstrap, BH-FDR, and the
-min-n-for-auc-difference calculator, plus an e2e main() test that runs
-over the committed transformer + RF predictions.
-"""
+"""significance.py — McNemar / DeLong / paired bootstrap / BH-FDR / power."""
 
 from __future__ import annotations
 
@@ -23,11 +18,6 @@ import significance as sig  # noqa: E402
 from sklearn.metrics import roc_auc_score
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-# McNemar
-# ──────────────────────────────────────────────────────────────────────────────
-
-
 def test_mcnemar_identical_predictions_p_is_one():
     rng = np.random.default_rng(0)
     y = rng.integers(0, 2, size=500)
@@ -39,7 +29,6 @@ def test_mcnemar_identical_predictions_p_is_one():
 
 
 def test_mcnemar_clearly_different_predictions_significant():
-    # Model A is perfect; model B always predicts 0.
     y = np.tile([0, 1], 100)
     r = sig.mcnemar_test(y, y, np.zeros_like(y))
     assert r.p_value < 0.001
@@ -47,15 +36,10 @@ def test_mcnemar_clearly_different_predictions_significant():
 
 def test_mcnemar_small_discordant_uses_exact_binomial():
     y = np.array([0, 0, 0, 1, 1, 1, 1, 1, 1, 1])
-    a = np.array([0, 0, 0, 1, 1, 1, 1, 1, 1, 1])  # perfect
-    b = np.array([0, 0, 1, 1, 1, 1, 1, 1, 1, 1])  # one FP
+    a = np.array([0, 0, 0, 1, 1, 1, 1, 1, 1, 1])
+    b = np.array([0, 0, 1, 1, 1, 1, 1, 1, 1, 1])
     r = sig.mcnemar_test(y, a, b)
     assert r.extra["method"] == "exact_binomial"
-
-
-# ──────────────────────────────────────────────────────────────────────────────
-# DeLong
-# ──────────────────────────────────────────────────────────────────────────────
 
 
 def test_delong_identical_scores_p_is_one():
@@ -71,13 +55,11 @@ def test_delong_stat_matches_sign_of_auc_diff():
     rng = np.random.default_rng(2)
     n = 1000
     y = rng.integers(0, 2, size=n)
-    # Build p_a that is a better classifier than p_b.
     p_a = np.where(y == 1, rng.uniform(0.5, 1.0, size=n), rng.uniform(0.0, 0.5, size=n))
     p_b = np.where(y == 1, rng.uniform(0.4, 0.9, size=n), rng.uniform(0.1, 0.6, size=n))
     r = sig.delong_auc_test(y, p_a, p_b)
     auc_a, auc_b = roc_auc_score(y, p_a), roc_auc_score(y, p_b)
     assert (r.effect > 0) == (auc_a > auc_b)
-    # CI should bracket the observed effect.
     assert r.ci_low <= r.effect <= r.ci_high
 
 
@@ -86,11 +68,6 @@ def test_delong_requires_both_classes():
     p = np.linspace(0.1, 0.9, 10)
     with pytest.raises(ValueError):
         sig.delong_auc_test(y, p, p)
-
-
-# ──────────────────────────────────────────────────────────────────────────────
-# Paired bootstrap
-# ──────────────────────────────────────────────────────────────────────────────
 
 
 def test_paired_bootstrap_ci_brackets_observed():
@@ -108,7 +85,6 @@ def test_paired_bootstrap_ci_brackets_observed():
 
 
 def test_paired_bootstrap_zero_effect_large_p():
-    """When both models are the same, bootstrap p should be near 1."""
     rng = np.random.default_rng(4)
     n = 500
     y = rng.integers(0, 2, size=n)
@@ -119,11 +95,6 @@ def test_paired_bootstrap_zero_effect_large_p():
     )
     assert r.p_value > 0.5
     assert abs(r.effect) < 1e-12
-
-
-# ──────────────────────────────────────────────────────────────────────────────
-# BH-FDR
-# ──────────────────────────────────────────────────────────────────────────────
 
 
 def test_bh_fdr_preserves_nothing_when_all_ones():
@@ -141,15 +112,9 @@ def test_bh_fdr_rejects_all_when_all_zero():
 def test_bh_fdr_q_values_monotone_in_p_rank():
     p = [0.001, 0.01, 0.02, 0.04, 0.5, 0.8]
     out = sig.bh_fdr(p, q=0.05)
-    # q-values should be non-decreasing when p is sorted.
     order = np.argsort(p)
     q_sorted = out["q_values"][order]
     assert (np.diff(q_sorted) >= -1e-9).all()
-
-
-# ──────────────────────────────────────────────────────────────────────────────
-# Power analysis
-# ──────────────────────────────────────────────────────────────────────────────
 
 
 def test_min_n_for_auc_difference_scales_with_gap():
@@ -165,11 +130,6 @@ def test_min_n_for_auc_difference_infinite_on_identical():
     assert n >= 1e8
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-# End-to-end
-# ──────────────────────────────────────────────────────────────────────────────
-
-
 def test_run_all_pairs_on_committed(tmp_path):
     seed_42 = REPO / "results" / "transformer" / "seed_42"
     seed_1 = REPO / "results" / "transformer" / "seed_1"
@@ -181,9 +141,7 @@ def test_run_all_pairs_on_committed(tmp_path):
     loaded = [sig._load_run(seed_42), sig._load_run(seed_1), sig._load_run(rf)]
     loaded = [r for r in loaded if r is not None]
     df = sig.run_all_pairs(loaded, n_resamples=200, seed=0)
-    # Should produce at least mcnemar + delong rows per pair.
     assert not df.empty
     assert "q_value" in df.columns
-    # Every p-value should be finite and in [0, 1].
     finite = df["p_value"].dropna()
     assert ((finite >= 0) & (finite <= 1)).all()

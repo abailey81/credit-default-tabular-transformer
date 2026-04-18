@@ -1,46 +1,7 @@
-"""
-data_sources.py — Resilient, multi-source data ingestion for the
-UCI Credit Card Default dataset.
+"""UCI dataset ingestion with a UCI-API → local-``.xls`` fallback chain.
 
-This module provides a layered abstraction for loading the dataset, with
-graceful failover from a remote API source (the UCI ML Repository) to a
-locally-shipped Excel spreadsheet. It is designed so that the rest of the
-project remains agnostic to *where* the data came from while still being
-able to report which source was used for full provenance.
-
-Architecture
-------------
-
-        ┌──────────────────────────────────────────────────┐
-        │                ChainedDataSource                  │
-        │   (tries each child source in order, fails over)  │
-        └──────────────┬───────────────────┬────────────────┘
-                       ▼                   ▼
-              ┌────────────────┐  ┌──────────────────────┐
-              │ UCIRepoSource  │  │  LocalExcelSource     │
-              │ (network API)  │  │  (offline fallback)   │
-              └────────────────┘  └──────────────────────┘
-
-Public API
-----------
-* :class:`DataSource`            – abstract base for any ingestion source.
-* :class:`UCIRepoSource`         – fetches via the ``ucimlrepo`` package, with
-                                   bounded exponential-backoff retries.
-* :class:`LocalExcelSource`      – reads from a list of candidate ``.xls``/
-                                   ``.xlsx`` paths.
-* :class:`ChainedDataSource`     – tries sources in order, accumulating errors.
-* :class:`DataSourceResult`      – frozen, provenance-bearing success record.
-* :class:`DataIngestionError`    – raised when *all* configured sources fail.
-* :func:`build_default_data_source` – factory used by the rest of the codebase.
-
-Design notes
-------------
-*   Sources are side-effect-free until :py:meth:`DataSource.load` is called.
-*   The chained source records every failed attempt in
-    :py:attr:`DataSourceResult.failed_attempts` so callers can audit the
-    fallback path even on success.
-*   The factory honours an explicit ``data_path`` argument as a hard pin —
-    if the user has named a file, we never silently fall back to the network.
+The rest of the pipeline sees a single ``DataSourceResult`` and doesn't care
+which source won.
 """
 
 from __future__ import annotations
@@ -60,14 +21,10 @@ PathLike = Union[str, Path]
 SourceMode = Literal["auto", "api", "local"]
 
 
-# ──────────────────────────────────────────────────────────────────────────────
 # Constants
-# ──────────────────────────────────────────────────────────────────────────────
 
 UCI_DATASET_ID = 350
 
-# Mapping for the column codes ucimlrepo returns. Mirrors the mapping that
-# previously lived inline in ``data_preprocessing.load_raw_data``.
 UCI_COLUMN_MAP: dict[str, str] = {
     "X1": "LIMIT_BAL", "X2": "SEX", "X3": "EDUCATION",
     "X4": "MARRIAGE", "X5": "AGE",
@@ -79,10 +36,6 @@ UCI_COLUMN_MAP: dict[str, str] = {
     "X21": "PAY_AMT4", "X22": "PAY_AMT5", "X23": "PAY_AMT6",
 }
 
-# Default search order for the manual fallback file. Resolved at load time
-# against both the project root and the current working directory so the
-# loader behaves the same whether invoked as a script, a notebook, or an
-# installed entry point.
 DEFAULT_LOCAL_CANDIDATES: Tuple[str, ...] = (
     "data/raw/default_of_credit_card_clients.xls",
     "data/raw/default_of_credit_card_clients.xlsx",
@@ -92,18 +45,13 @@ DEFAULT_LOCAL_CANDIDATES: Tuple[str, ...] = (
     "default of credit card clients.xls",
 )
 
-# UCI hosts the original .xls under this URL — recorded as the canonical
-# remote origin for provenance reports.
 UCI_DATASET_URL = f"https://archive.ics.uci.edu/dataset/{UCI_DATASET_ID}"
 
 
-# ──────────────────────────────────────────────────────────────────────────────
 # Errors and result records
-# ──────────────────────────────────────────────────────────────────────────────
-
 
 class DataIngestionError(RuntimeError):
-    """Raised when no configured data source can supply the dataset."""
+    """Every configured source failed — no data."""
 
     def __init__(self, attempts: Sequence[Tuple[str, str]]):
         self.attempts: Tuple[Tuple[str, str], ...] = tuple(attempts)
@@ -115,7 +63,7 @@ class DataIngestionError(RuntimeError):
 
 @dataclass(frozen=True)
 class DataSourceResult:
-    """Provenance-bearing result from a successful data load."""
+    """Successful load + where it came from."""
 
     dataframe: pd.DataFrame
     source_name: str
@@ -127,7 +75,7 @@ class DataSourceResult:
     def summary(self) -> str:
         rows, cols = self.dataframe.shape
         line = (
-            f"loaded {rows:,} rows × {cols} cols from {self.source_name} "
+            f"loaded {rows:,} rows x {cols} cols from {self.source_name} "
             f"({self.origin}) in {self.duration_s:.2f}s"
         )
         if self.failed_attempts:
@@ -136,39 +84,26 @@ class DataSourceResult:
         return line
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Abstract base
-# ──────────────────────────────────────────────────────────────────────────────
-
-
 class DataSource(ABC):
-    """Abstract data source. Implementations are side-effect-free until ``load()``."""
+    """Base class. Subclasses stay side-effect-free until ``load()``."""
 
     source_type: Literal["api", "local"]
 
     @property
     @abstractmethod
     def name(self) -> str:
-        """Human-readable identifier for logging and provenance."""
+        """Log-friendly identifier."""
 
     @abstractmethod
     def load(self) -> DataSourceResult:
-        """Materialise the dataset. Raises on any failure."""
+        """Fetch the frame. Raises on failure."""
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-# UCI repository source (network API)
-# ──────────────────────────────────────────────────────────────────────────────
-
+# UCI API source
 
 class UCIRepoSource(DataSource):
-    """
-    Fetch the dataset directly from the UCI ML Repository via ``ucimlrepo``.
-
-    Includes a small retry budget with exponential backoff so that transient
-    network glitches do not silently demote the pipeline to the offline
-    fallback.
-    """
+    """UCI ML Repository fetch via ``ucimlrepo``, with exponential backoff
+    so a flaky TCP path doesn't silently drop us onto the local fallback."""
 
     source_type: Literal["api"] = "api"
 
@@ -203,15 +138,9 @@ class UCIRepoSource(DataSource):
                 "or rely on the local fallback dataset."
             ) from exc
 
-        # Defence in depth for SECURITY_AUDIT H-2:
-        #   (a) socket.setdefaulttimeout — the underlying urllib.request call
-        #       inside ``ucimlrepo`` cannot hang at the TCP level forever.
-        #   (b) ThreadPoolExecutor + Future.result(timeout=…) — enforces a hard
-        #       wall-clock deadline on the overall fetch even if the socket
-        #       layer mishandles the timeout.
-        # Level (a) alone would leak a background thread on timeout; level (b)
-        # alone leaves the background thread blocked in urllib forever after
-        # timeout. Both together guarantee termination and bounded resource use.
+        # Two-layer timeout (SECURITY_AUDIT H-2): socket timeout caps TCP-level
+        # hangs; ThreadPoolExecutor wraps a wall-clock deadline so a blocked
+        # worker thread can't outlive us.
         import socket
         from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeout
 
@@ -238,7 +167,6 @@ class UCIRepoSource(DataSource):
                     try:
                         dataset = future.result(timeout=self.request_timeout_seconds)
                     except FutureTimeout as exc:
-                        # Deadline exceeded; abandon the worker thread.
                         future.cancel()
                         raise TimeoutError(
                             f"UCI fetch exceeded {self.request_timeout_seconds:.0f}s deadline"
@@ -246,7 +174,6 @@ class UCIRepoSource(DataSource):
                 last_error = None
                 break
             except (ConnectionError, TimeoutError, OSError, ValueError) as exc:
-                # Recoverable: retry with exponential backoff.
                 last_error = exc
                 logger.warning(
                     "UCI fetch attempt %d/%d failed: %s",
@@ -278,27 +205,17 @@ class UCIRepoSource(DataSource):
         )
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Local Excel source (offline fallback)
-# ──────────────────────────────────────────────────────────────────────────────
-
+# Local Excel source
 
 class LocalExcelSource(DataSource):
-    """
-    Read the dataset from a local ``.xls``/``.xlsx`` file.
-
-    A list of candidate paths can be supplied; the first one that resolves
-    to an existing file wins. Paths can be absolute or relative; relative
-    paths are resolved against (1) the current working directory and (2)
-    the repository root, in that order.
-    """
+    """Read from a local ``.xls``/``.xlsx``. Candidates are tried in order;
+    relative paths resolve against cwd and repo root."""
 
     source_type: Literal["local"] = "local"
 
     def __init__(self, candidates: Sequence[PathLike]) -> None:
         if not candidates:
             raise ValueError("LocalExcelSource requires at least one candidate path")
-        # Preserve order, drop duplicates.
         seen: set[str] = set()
         unique: list[Path] = []
         for c in candidates:
@@ -314,8 +231,6 @@ class LocalExcelSource(DataSource):
 
     @staticmethod
     def _search_roots() -> list[Path]:
-        """Locations to resolve relative candidate paths against."""
-        # this file: <repo>/src/data_sources.py → <repo>
         repo_root = Path(__file__).resolve().parent.parent
         roots: list[Path] = []
         for r in (Path.cwd(), repo_root):
@@ -353,8 +268,7 @@ class LocalExcelSource(DataSource):
 
         logger.info("Loading dataset from local file: %s", path)
         start = time.perf_counter()
-        # The UCI .xls ships with a section header on row 0; the real header
-        # is on row 1. ``header=1`` matches the original loading semantics.
+        # UCI .xls: row 0 is a section banner, real column headers on row 1.
         df = pd.read_excel(path, header=1)
         elapsed = time.perf_counter() - start
 
@@ -367,15 +281,11 @@ class LocalExcelSource(DataSource):
         )
 
 
-# ──────────────────────────────────────────────────────────────────────────────
 # Chained source
-# ──────────────────────────────────────────────────────────────────────────────
-
 
 class ChainedDataSource(DataSource):
-    """Try each child source in order, falling over on failure."""
+    """Walk the child sources in order; fall through on recoverable errors."""
 
-    # Nominal type — the actual source is reported in the ``DataSourceResult``.
     source_type: Literal["api"] = "api"
 
     def __init__(self, sources: Sequence[DataSource]) -> None:
@@ -385,18 +295,17 @@ class ChainedDataSource(DataSource):
 
     @property
     def name(self) -> str:
-        return "Chain[" + " → ".join(s.name for s in self.sources) + "]"
+        return "Chain[" + " -> ".join(s.name for s in self.sources) + "]"
 
-    # Recoverable failures that justify falling over to the next source.
-    # Broader bugs (TypeError, MemoryError, BaseException like KeyboardInterrupt)
-    # must NOT be swallowed — they indicate developer error or user intent.
+    # only these errors justify falling through — TypeError / MemoryError /
+    # KeyboardInterrupt must propagate so real bugs stay visible.
     _RECOVERABLE_ERRORS: tuple = (
         ConnectionError,
         TimeoutError,
         FileNotFoundError,
-        OSError,  # includes socket.gaierror, ssl.SSLError, etc.
-        ValueError,  # malformed source output (schema mismatch, etc.)
-        ImportError,  # ucimlrepo not installed in local-only environments
+        OSError,
+        ValueError,
+        ImportError,
     )
 
     def load(self) -> DataSourceResult:
@@ -409,12 +318,8 @@ class ChainedDataSource(DataSource):
                 failures.append((source.name, f"{type(exc).__name__}: {exc}"))
                 continue
             except Exception as exc:
-                # Unrecoverable (programming error, hardware failure, etc.):
-                # record the failure, re-raise. We don't want to silently
-                # cascade to the local fallback if e.g. a tokenisation bug
-                # produced the exception — that would hide bugs.
                 logger.error(
-                    "Source '%s' raised unrecoverable %s — aborting chain",
+                    "Source '%s' raised unrecoverable %s -- aborting chain",
                     source.name, type(exc).__name__,
                 )
                 failures.append((source.name, f"{type(exc).__name__}: {exc}"))
@@ -438,10 +343,7 @@ class ChainedDataSource(DataSource):
         raise DataIngestionError(failures)
 
 
-# ──────────────────────────────────────────────────────────────────────────────
 # Factory
-# ──────────────────────────────────────────────────────────────────────────────
-
 
 def build_default_data_source(
     data_path: Optional[PathLike] = None,
@@ -452,50 +354,22 @@ def build_default_data_source(
     max_retries: int = 3,
     backoff_seconds: float = 1.5,
 ) -> DataSource:
-    """
-    Build the canonical data source used throughout the project.
+    """Build the project's canonical source.
 
-    Behaviour
-    ---------
-    * **Explicit ``data_path``** – a :class:`LocalExcelSource` pinned to that
-      file is returned regardless of ``mode``. The user has spoken; we honour
-      their choice and never silently fall back to the network.
-    * **``mode="auto"`` (default)** – returns a :class:`ChainedDataSource`
-      that first tries the UCI API, then falls back to the local file.
-      If ``allow_fallback=False`` the local fallback is skipped and API
-      failures propagate.
-    * **``mode="api"``** – API only; failures propagate.
-    * **``mode="local"``** – local file only; tried against the default
-      candidates plus any ``extra_local_candidates``.
-
-    Parameters
-    ----------
-    data_path
-        Optional explicit path to a local ``.xls``/``.xlsx`` file.
-    mode
-        Source preference: ``"auto"``, ``"api"``, or ``"local"``.
-    allow_fallback
-        Only relevant in ``"auto"`` mode. If ``False``, the API becomes a
-        hard requirement.
-    extra_local_candidates
-        Additional local file candidates appended to the default search list.
-    max_retries
-        Number of attempts the UCI source will make before giving up.
-    backoff_seconds
-        Base interval for exponential backoff between UCI retries.
+    ``data_path`` hard-pins a local file (mode ignored). Otherwise:
+    ``auto`` → API then local (chained), ``api`` → API only, ``local`` →
+    defaults + ``extra_local_candidates``. ``allow_fallback=False`` in auto
+    mode makes API failure fatal.
     """
     if mode not in ("auto", "api", "local"):
         raise ValueError(f"Unknown mode: {mode!r}. Expected 'auto', 'api', or 'local'.")
 
-    # Build the local source. We always need at least one candidate to
-    # construct it; either the user-supplied path or the defaults.
     if data_path is not None:
         local_candidates: list[PathLike] = [Path(data_path)]
     else:
         local_candidates = list(DEFAULT_LOCAL_CANDIDATES) + list(extra_local_candidates)
     local_source = LocalExcelSource(local_candidates)
 
-    # An explicit path is a hard pin — never silently hit the network.
     if data_path is not None:
         return local_source
 
@@ -510,7 +384,6 @@ def build_default_data_source(
     if mode == "api":
         return api_source
 
-    # mode == "auto"
     if allow_fallback:
         return ChainedDataSource([api_source, local_source])
     return api_source

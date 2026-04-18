@@ -1,10 +1,4 @@
-"""Tests for src/repro.py.
-
-Unit tests for the individual Check helpers plus a gentle smoke test
-that the full runner doesn't crash. We don't invoke the subprocesses
-inside the check runs here — those are expensive — we just verify the
-helper logic.
-"""
+"""repro.py — Check helpers + a run_all smoke."""
 
 from __future__ import annotations
 
@@ -53,7 +47,6 @@ def test_compare_dataframes_beyond_rtol():
 
 
 def test_compare_dataframes_string_columns():
-    """String-valued cells (e.g. "0.78 ± 0.01" from evaluate.py) compare exactly."""
     df1 = pd.DataFrame({"model": ["Transformer", "RF"], "score": ["0.78", "0.79"]})
     df2 = df1.copy()
     ok, _ = repro._compare_dataframes(df1, df2)
@@ -64,7 +57,6 @@ def test_compare_dataframes_string_columns():
 
 
 def test_check_artefacts_exist_returns_check():
-    """On the committed repo this should pass; at minimum it returns a Check."""
     c = repro.check_artefacts_exist(REPO)
     assert isinstance(c, repro.Check)
     assert c.name == "artefacts_exist"
@@ -76,14 +68,12 @@ def test_check_python_pins_passes():
 
 
 def test_split_hashes_check_passes_on_committed_repo():
-    """SPLIT_HASHES.md should match the committed data splits on a clean
-    checkout. If this fails, either the hash file or the data has drifted."""
     c = repro.check_split_hashes_match(REPO)
     assert c.name == "split_hashes_match"
     if not (REPO / "data" / "processed" / "SPLIT_HASHES.md").is_file():
         pytest.skip("SPLIT_HASHES.md not committed on this branch")
     assert c.passed, c.detail
-    assert c.metadata["n_files"] >= 4  # at least the raw + metadata files
+    assert c.metadata["n_files"] >= 4
 
 
 def test_split_hashes_check_fails_gracefully_without_file(tmp_path):
@@ -104,8 +94,6 @@ def test_report_summarisation():
 
 
 def test_run_all_does_not_crash(tmp_path):
-    """End-to-end: the runner should return a Report, even if some
-    checks fail (e.g. we're in a dirty working tree)."""
     scratch = tmp_path / "scratch"
     scratch.mkdir()
     rep = repro.run_all(REPO, scratch)

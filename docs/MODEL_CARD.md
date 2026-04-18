@@ -1,170 +1,150 @@
-# Model Card — `TabularTransformer` (Credit-Default Prediction)
+# Model Card — TabularTransformer (Credit-Default Prediction)
 
-Following Mitchell et al. (2019) "Model Cards for Model Reporting". This
-card covers the small from-scratch transformer trained for the UCL MSc
-Finance & AI coursework on the UCI Credit Card Default dataset. It is a
-coursework artefact, not a production model.
+A small from-scratch transformer for the UCI credit-default task, built
+for UCL MSc Finance & AI coursework. Not production.
 
----
-
-## 1. Model details
+## Model details
 
 | Item | Value |
 |---|---|
-| Model type | Small encoder-only transformer (FT-Transformer family) |
+| Type | Encoder-only transformer, FT-Transformer family |
 | Layers / heads / d_model / d_ff | 2 / 4 / 32 / 128 |
-| Parameter count | **~28,600** (trainable) |
-| Inputs | 23 tabular features + `[CLS]` token = 24-token sequence |
-| Aggregation | `[CLS]` pooling (ablation A5 sweep available) |
-| Output | Single logit; `sigmoid` gives P(default) |
-| Novel inductive biases | N2 feature-group attention bias; N3 temporal-decay attention bias |
-| Pretraining objective (optional) | N4 — masked tabular language modelling (MTLM) |
+| Parameters | ~28,600 trainable |
+| Inputs | 23 tabular features + `[CLS]` = 24-token sequence |
+| Aggregation | `[CLS]` pooling (A5 ablation available) |
+| Output | single logit; σ → P(default) |
+| Novel biases | N2 feature-group attention bias, N3 temporal-decay bias |
+| Pretraining (opt.) | N4 masked tabular LM |
 | Framework | PyTorch 2.2, Python 3.10–3.12 |
-| License | Academic use (coursework); MIT on the repo |
+| License | academic (coursework); MIT on the repo |
 | Developers | Tamer Atesyakar (integration, PR merges, hardening), abailey81 (EDA, preprocessing, plan), FardeenIdrus (attention / transformer / eval), Idaliia19 (tokenizer / dataset), LexieLee1020 (embedding), Shakhzod555 (RF benchmark) |
-| Paper / reference | Plan §6 (architecture), Gorishniy et al. 2021 "Revisiting Deep Learning Models for Tabular Data" |
-| Repository | `abailey81/credit-default-tabular-transformer` |
-| Cite this model | This model card + PROJECT_PLAN.md commit SHA on the `additional` branch |
+| Reference arch | Gorishniy et al. 2021 |
+| Repo | `abailey81/credit-default-tabular-transformer` |
+| Cite | this card + `PROJECT_PLAN.md` commit SHA on the `additional` branch |
 
-## 2. Intended use
+## Intended use
 
-**In scope**
-- Demonstrating that a from-scratch self-attention transformer can be
-  trained end-to-end on a small (30k-row) tabular classification dataset
-  and competitively benchmarked against a tuned Random Forest.
-- A tokeniser / embedding / attention walkthrough in a pedagogical
-  context.
-- A case study for calibration methods (§11), subgroup fairness (§11A),
-  and uncertainty quantification (§11B) on tabular data.
+In scope: showing that a from-scratch self-attention transformer can be
+trained on a 30k-row tabular task and benchmarked against a tuned RF; a
+pedagogical walkthrough of tokenisation / embedding / attention on
+tabular data; calibration, subgroup fairness, and MC-dropout uncertainty
+as a case study.
 
-**Out of scope / prohibited use**
-- Real-world credit-decision deployment. This model was trained on a
-  single 2005 Taiwanese bank's data; distribution drift is extreme.
-- Any automated decision that affects a consumer's access to credit,
-  employment, housing, or insurance.
-- Transfer to any other tabular task without re-training.
+Out of scope: any real credit decision; any automated decision affecting
+access to credit, employment, housing, or insurance; transfer to other
+tabular tasks without retraining. Training data is one Taiwanese bank,
+2005 — distribution drift to any modern setting is severe.
 
-## 3. Training data
+## Training data
 
-- **Source**: UCI Machine Learning Repository, dataset ID 350
-  (Yeh & Lien, 2009, *Expert Systems with Applications*).
-- **Size**: 30,000 rows, 23 features + 1 binary target (`DEFAULT`).
-- **Base rate**: 22.1 % positive class.
-- **Temporal coverage**: April – September 2005; October 2005 target.
-- **Country**: Taiwan (single bank).
-- **Split**: 70 % / 15 % / 15 % stratified on `DEFAULT`
-  → 21,000 / 4,500 / 4,500.
-- **Provenance**: loaded via `src/data_sources.py` which attempts UCI
-  API first, falls back to a committed local `.xls` — same bytes on
-  every machine.
+UCI ML Repository dataset 350 (Yeh & Lien 2009, *Expert Systems with
+Applications*). 30,000 rows, 23 features, binary `DEFAULT`, base rate
+22.1 %. April–Sep 2005 observations, Oct 2005 as the prediction target;
+single Taiwanese bank. Split 70/15/15 stratified on `DEFAULT`
+(21,000 / 4,500 / 4,500). Loaded via `src/data_sources.py` (UCI API, with
+a committed local `.xls` fallback so every machine sees identical bytes).
+See `docs/DATA_SHEET.md`.
 
-See `docs/DATA_SHEET.md` for the full Gebru-et-al. data sheet.
+## Evaluation data
 
-## 4. Evaluation data
+The 15 % test split above. Held out from every tuning decision; model
+selection was done on val.
 
-Identical to training data's 15 % test split. Not touched during
-hyperparameter tuning — decisions were made on the validation split
-only.
+## Performance measures
 
-## 5. Performance measures
-
-Reported in `results/comparison_table.{csv,md}` and
-`results/evaluate_summary.json`. Aggregates from
-`results/transformer/seed_*/test_metrics.json` (n=3 seeds) plus MTLM
-fine-tune (n=1).
+Reported in `results/comparison_table.{csv,md}` +
+`results/evaluate_summary.json`, aggregated from
+`results/transformer/seed_*/test_metrics.json` (n=3 supervised seeds) and
+the MTLM fine-tune (n=1).
 
 | Model | AUC-ROC | AUC-PR | ECE (raw) | ECE (Platt) | Brier |
 |---|---|---|---|---|---|
-| Transformer from scratch (n=3) | 0.7797 ± 0.0023 | 0.5592 ± 0.0043 | 0.2589 | **0.011 ± 0.003** | 0.209 |
-| Transformer + MTLM (n=1) | 0.7801 | 0.5605 | 0.2515 | **0.007** | 0.206 |
+| Transformer from scratch (n=3) | 0.7797 ± 0.0023 | 0.5592 ± 0.0043 | 0.2589 | 0.011 ± 0.003 | 0.209 |
+| Transformer + MTLM (n=1) | 0.7801 | 0.5605 | 0.2515 | 0.007 | 0.206 |
 | Transformer ensemble (arithmetic, n=3) | 0.7815 | 0.5646 | 0.2606 | — | 0.209 |
 | RF baseline | 0.7654 | 0.5389 | — | — | — |
-| RF tuned | **0.7852** | 0.5648 | **0.0103** | — | 0.133 |
+| RF tuned | 0.7852 | 0.5648 | 0.0103 | — | 0.133 |
 
-Statistical significance (Phase 12): DeLong AUC-difference RF vs
-transformer p = 0.023 (raw), q = 0.23 after BH-FDR across 15 pairwise
-comparisons. **We do not claim a statistically-significant AUC gap** at
-FDR 0.05. McNemar accuracy differences at τ = 0.5 are significant
-because the two models trade off sensitivity / specificity differently
-at the default threshold.
+DeLong on RF vs transformer (seed_42): p = 0.023 raw, q = 0.23 after BH
+over 15 pairwise comparisons. We do not claim a significant AUC gap at
+FDR 0.05. McNemar on τ=0.5 accuracy differences *is* significant — the
+two models trade sensitivity for specificity differently at that
+threshold.
 
-**Power**: the 4,500-row test split has 80 % power to detect an
-AUC gap of 0.02 or larger at α = 0.05. A 0.005 gap requires ~240,000
-rows to adjudicate — the observed RF-vs-transformer gap sits inside the
-noise band on our test set.
+Power: the 4,500-row test split has 80 % power to detect an AUC gap of
+0.02 at α = 0.05. A 0.005 gap would need ~240,000 rows. The observed
+RF-vs-transformer gap sits inside the noise band on this test set.
 
-## 6. Calibration
+## Calibration
 
-Raw transformer probabilities are poorly calibrated
-(ECE ≈ 0.26) — confidences cluster around the positive-class base rate
-but a small number are over-confident. Post-hoc Platt or isotonic
-scaling fitted on the validation split drops ECE to a range of
-0.007–0.013 across our four runs (3-seed mean 0.011 ± 0.003; MTLM
-seed 0.007) without moving AUC. This is indistinguishable from the
-tuned RF's native ECE (0.010). **Deploy with Platt scaling; never the
-raw logits.** See `results/calibration/calibration_metrics.csv` and
+Raw transformer probabilities are poorly calibrated (ECE ≈ 0.26) — most
+confidences cluster near the base rate, a few are over-confident.
+Post-hoc Platt or isotonic fit on the val split drops ECE to 0.007–0.013
+across the four runs (3-seed mean 0.011 ± 0.003; MTLM 0.007), no change
+in AUC. That matches the tuned RF's native 0.010. Deploy with Platt, not
+raw logits. See `results/calibration/calibration_metrics.csv` and
 `figures/calibration_reliability.png`.
 
-## 7. Ethical considerations & limitations
+## Ethical considerations and limitations
 
-- **Subgroup fairness (Phase 11A, N10)**. On SEX the transformer shows
-  a small demographic-parity gap (Male vs Female: Δ = +0.02 selection
-  rate); AUC differs by Δ = −0.011 (Female has slightly higher AUC).
-  On EDUCATION the subgroup "Other" (n = 61) is underpowered and shows
-  extreme disparity (AUC drops by 0.19 – 0.31); the raw-category merge
-  0/5/6 → 4 may be concentrating rare cases. This is a coursework
-  dataset; we do **not** recommend drawing demographic inferences.
-  Full tables: `results/fairness/subgroup_metrics.csv`.
-- **Kleinberg–Mullainathan–Raghavan impossibility** (2016). Demographic
-  parity, equalised odds, and calibration parity cannot simultaneously
-  hold on a non-trivial dataset with base-rate heterogeneity — our
-  audit surfaces *which* criterion is violated.
-- **Dataset vintage**. 2005 Taiwan; not transferable to present-day
-  retail credit, which has different default-correlation structure,
-  covariate distributions, and legal protections.
-- **Label definition**. Only "default in October 2005" is labelled —
-  no future-repayment follow-up, so performance on longer horizons is
-  unknown.
-- **Single-bank bias**. One Taiwanese bank's underwriting policy;
-  selection bias is not quantified.
-- **No differential privacy**. The training procedure is not
-  differentially private; membership-inference risk on this open
-  dataset is low but non-zero.
+Phase 11A subgroup audit (N10): on `SEX`, demographic-parity Δ = +0.02
+(Male − Female selection rate) and female AUC is 0.011 higher than male.
+On `EDUCATION`, the "Other" subgroup (n=61) is underpowered and shows
+extreme disparity (AUC 0.19–0.31 below the other buckets); the
+preprocessing merge 0/5/6 → 4 may be concentrating rare cases. Full
+tables in `results/fairness/subgroup_metrics.csv`. This is a coursework
+dataset — do not draw demographic inferences from it.
 
-## 8. Caveats & recommendations
+Kleinberg–Mullainathan–Raghavan (2016): demographic parity, equalised
+odds, and calibration parity can't all hold when base rates differ
+across groups. The audit surfaces which criterion is violated; it does
+not promise all three.
 
-- Always pair predictions with the Phase 11B MC-dropout predictive
-  entropy — refuse to predict (defer to human review) for the top
-  ~30 % most-uncertain rows lifts retained AUC from 0.779 to 0.82.
-  See `figures/uncertainty_refuse_curve.png`.
-- When reporting headline metrics in the report, report the ensemble
-  row AND the RF row. The from-scratch vs MTLM-pretrained difference
-  is within seed noise on this test set (DeLong p = 0.26, Phase 12).
-- For any extension of this work, re-fit a fresh calibrator on the
-  downstream target distribution rather than assuming the Platt
-  coefficients transfer.
+Dataset vintage: 2005 Taiwan. Default-correlation structure, covariate
+distributions, and legal protections have all shifted. The label only
+covers default in October 2005, so longer-horizon performance is
+unknown. Selection bias from the bank's underwriting policy is
+unquantified. Training isn't differentially private; membership-
+inference risk on this public dataset is low but non-zero.
 
-## 9. Trained-model artefacts
+## Caveats and recommendations
+
+Pair predictions with Phase 11B MC-dropout predictive entropy: deferring
+the top ~30 % most-uncertain rows lifts retained AUC from 0.779 to 0.82.
+See `figures/uncertainty_refuse_curve.png`.
+
+When reporting headline metrics, show both the ensemble row and the RF
+row. From-scratch vs MTLM pretrained is within seed noise on this test
+set (DeLong p = 0.26).
+
+Extending this work? Refit the calibrator on the downstream target
+distribution — don't reuse these Platt coefficients.
+
+## Trained-model artefacts
 
 | Artefact | Location |
 |---|---|
 | Full checkpoint bundle | `results/transformer/seed_42/best.pt` + `.pt.weights` + `.pt.meta.json` |
-| Encoder-only state dict (for MTLM → fine-tune transitions) | produced by `src/train_mtlm.py` → `encoder_pretrained.pt` |
-| Per-seed configs | `results/transformer/seed_*/config.json` |
-| Per-seed training logs | `results/transformer/seed_*/train_log.csv` |
-| Test-set predictions | `results/transformer/seed_*/test_predictions.npz` |
+| Encoder-only (MTLM → fine-tune) | `results/mtlm/run_42/encoder_pretrained.pt` |
+| Per-seed config | `results/transformer/seed_*/config.json` |
+| Per-seed training log | `results/transformer/seed_*/train_log.csv` |
+| Test predictions | `results/transformer/seed_*/test_predictions.npz` |
 
-Loaded under `weights_only=True` by default (SECURITY_AUDIT C-1);
-`trust_source=True` only for our own bundles.
+Checkpoints load with `weights_only=True` by default (SECURITY_AUDIT
+C-1); `trust_source=True` only applies to our own bundles.
 
-## 10. Reproducibility
+## Reproducibility
 
-See `docs/REPRODUCIBILITY.md` and `src/repro.py`. Every derivative
-artefact (`comparison_table.csv`, `rf/test_predictions.npz`, every
-evaluation CSV under `results/calibration/`, `results/fairness/`,
-`results/uncertainty/`, `results/significance/`) regenerates bit-stably
-from the committed source.
+See `docs/REPRODUCIBILITY.md` + `src/repro.py`. Every derivative artefact
+(`comparison_table.csv`, `rf/test_predictions.npz`, every CSV under
+`results/calibration/`, `results/fairness/`, `results/uncertainty/`,
+`results/significance/`) regenerates bit-stably from the committed
+source. Deterministic transformer retraining wants `torch == 2.2.2+cpu`,
+Python 3.12, `CUDA_LAUNCH_BLOCKING=1`, and the deterministic-algorithm
+flags recorded in each run's `config.json`.
 
-Deterministic transformer retraining requires matching
-torch == 2.2.2+cpu, Python 3.12, `CUDA_LAUNCH_BLOCKING=1`, and the
-same deterministic-algorithm flags recorded in each run's `config.json`.
+## References
+
+Mitchell et al. 2019 (Model Cards for Model Reporting); Gorishniy et al.
+2021 (Revisiting Deep Learning Models for Tabular Data);
+Kleinberg–Mullainathan–Raghavan 2016.

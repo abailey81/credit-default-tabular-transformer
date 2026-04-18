@@ -1,4 +1,4 @@
-"""Tests for src/utils.py — determinism, device, checkpoint, early stopping, accounting."""
+"""utils.py — determinism / device / checkpoint / early stopping / accounting."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 import torch
 
-from utils import (  # noqa: E402  (src is injected via conftest)
+from utils import (  # noqa: E402
     EarlyStopping,
     Timer,
     build_checkpoint_metadata,
@@ -23,11 +23,6 @@ from utils import (  # noqa: E402  (src is injected via conftest)
     save_checkpoint,
     set_deterministic,
 )
-
-
-# ──────────────────────────────────────────────────────────────────────────────
-# Determinism
-# ──────────────────────────────────────────────────────────────────────────────
 
 
 def test_set_deterministic_reproduces_tensors():
@@ -58,11 +53,6 @@ def test_derive_seed_differs_by_parent():
     assert derive_seed(42, "x") != derive_seed(43, "x")
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Device
-# ──────────────────────────────────────────────────────────────────────────────
-
-
 def test_get_device_cpu():
     assert get_device("cpu") == torch.device("cpu")
 
@@ -81,13 +71,8 @@ def test_get_device_invalid_raises():
         get_device("banana")
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Checkpointing
-# ──────────────────────────────────────────────────────────────────────────────
-
-
 def test_checkpoint_roundtrip_trusted():
-    """With trust_source=True, optimizer state round-trips."""
+    # trust_source=True: optimizer state round-trips
     model = torch.nn.Linear(8, 4)
     opt = torch.optim.Adam(model.parameters(), lr=1e-3)
 
@@ -115,7 +100,7 @@ def test_checkpoint_roundtrip_trusted():
 
 
 def test_checkpoint_roundtrip_safe_default():
-    """Default (trust_source=False) uses weights_only=True and restores weights only."""
+    # safe default (trust_source=False): weights_only=True, weights-only restore
     model = torch.nn.Linear(8, 4)
     opt = torch.optim.Adam(model.parameters(), lr=1e-3)
 
@@ -123,16 +108,17 @@ def test_checkpoint_roundtrip_safe_default():
         p = Path(tmp) / "ckpt.pt"
         save_checkpoint(p, model, optimizer=opt)
         model2 = torch.nn.Linear(8, 4)
-        loaded = load_checkpoint(p, model2)  # no trust_source — safe mode
+        loaded = load_checkpoint(p, model2)
         for (_, v1), (_, v2) in zip(
             model.state_dict().items(), model2.state_dict().items()
         ):
             assert torch.equal(v1, v2)
-        assert loaded["metadata"]["seed"] is None  # none was set
+        assert loaded["metadata"]["seed"] is None
 
 
 def test_load_checkpoint_warns_when_optimizer_requested_in_safe_mode(caplog):
-    """Passing optimizer= in safe mode emits a warning (optimizer state not restored)."""
+    # safe mode can't restore optimizer state. asking for one must warn,
+    # otherwise training state goes silently missing.
     import logging
 
     model = torch.nn.Linear(8, 4)
@@ -153,14 +139,8 @@ def test_checkpoint_load_missing_file():
         load_checkpoint("/tmp/does_not_exist_xyz.pt", model)
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-# EarlyStopping
-# ──────────────────────────────────────────────────────────────────────────────
-
-
 def test_early_stopping_max_mode():
     es = EarlyStopping(patience=3, mode="max", min_delta=1e-4)
-    # Improve, improve, plateau 3x → stop at step 5 (1-indexed) after three no-improvs
     scores = [0.70, 0.75, 0.75, 0.75, 0.75]
     stopped = [es.step(s) for s in scores]
     assert stopped == [False, False, False, False, True]
@@ -173,7 +153,7 @@ def test_early_stopping_min_mode():
     assert not es.step(1.0)
     assert not es.step(0.5)
     assert not es.step(0.6)
-    assert es.step(0.7)  # second no-improvement
+    assert es.step(0.7)
     assert es.best_score == 0.5
 
 
@@ -183,21 +163,17 @@ def test_early_stopping_rejects_bad_mode():
 
 
 def test_early_stopping_stashes_state():
+    # best_state must be a detached copy — mutating the model afterwards
+    # must not leak into it
     es = EarlyStopping(patience=2, mode="max")
     model = torch.nn.Linear(4, 2)
     es.step(0.5, state=model.state_dict())
-    # Mutate, then check best_state is a detached copy.
     original = {k: v.clone() for k, v in model.state_dict().items()}
     with torch.no_grad():
         for p in model.parameters():
             p.add_(100.0)
     for k, v in es.best_state.items():
         assert torch.equal(v, original[k])
-
-
-# ──────────────────────────────────────────────────────────────────────────────
-# Accounting
-# ──────────────────────────────────────────────────────────────────────────────
 
 
 def test_count_parameters_trainable_only():
@@ -231,7 +207,6 @@ def test_configure_logging_is_idempotent():
     configure_logging()
     configure_logging()
     configure_logging()
-    # Should not raise; should not stack handlers.
     import logging
 
     handlers = [h for h in logging.getLogger().handlers if getattr(h, "_credit_default_handler", False)]

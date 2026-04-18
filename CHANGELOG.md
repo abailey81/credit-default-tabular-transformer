@@ -36,143 +36,121 @@ Contributors (alphabetical by GitHub handle):
 
 ## [Unreleased] — `feature/phase-11-12-14`
 
-Working branch `feature/phase-11-12-14`. Closes out Phase 8's post-merge
-review items and lands Phase 11 (calibration), Phase 11A (fairness /
-N10), Phase 11B (uncertainty / N11), Phase 12 (significance), Phase
-14A (reproducibility), and Phase 14B (Model Card + Data Sheet / N12).
-The plan's Section 4 (Experiments & Discussion) is now fully backed by
-committed CSVs + figures + regeneration harness.
+Phase 11 (calibration), 11A (fairness, N10), 11B (uncertainty, N11), 12
+(significance), 14A (reproducibility), 14B (Model Card + Data Sheet,
+N12), plus Phase 8 post-review items. Section 4 of the plan is now
+backed by committed CSVs, figures, and a regeneration harness.
 
 ### Added — Phase 11: post-hoc calibration (`src/calibration.py`, ~560 LOC)
 
-- **`TemperatureScaling`**, **`PlattScaling`**, **`IsotonicCalibrator`**,
-  and an **`IdentityCalibrator`** baseline. All share `fit(y_val, p_val) →
-  transform(p_test) → p_test_cal`. Temperature via bounded Brent search
-  on logit-NLL; Platt via L-BFGS-B on 2-parameter logistic; isotonic
-  via sklearn with `out_of_bounds="clip"`.
-- **ECE in equal-width and equal-mass (quantile) strategies**, MCE,
-  **Brier decomposition** (Murphy 1973: reliability − resolution +
-  uncertainty), and the **Brier skill score** derived from it.
-- **CLI pipeline** that fits every calibrator on each run's val split,
-  scores on test, and emits `results/calibration/calibration_metrics.csv`,
+- `TemperatureScaling`, `PlattScaling`, `IsotonicCalibrator` + an
+  `IdentityCalibrator` baseline, all sharing `fit(y_val, p_val) →
+  transform(p_test) → p_test_cal`. Temperature: bounded Brent on
+  logit-NLL. Platt: L-BFGS-B on a 2-param logistic. Isotonic wraps
+  sklearn with `out_of_bounds="clip"`.
+- ECE (equal-width + equal-mass), MCE, Brier decomposition
+  (Murphy 1973: reliability − resolution + uncertainty), Brier skill.
+- CLI fits every calibrator on each run's val, scores on test, writes
+  `results/calibration/calibration_metrics.csv`,
   `figures/calibration_reliability.png`,
   `figures/calibration_ece_bar.png`.
-- **Headline result**: raw transformer ECE 0.26 → post-Platt
-  **0.011 ± 0.003** (3-seed mean; MTLM single-seed 0.007; range across
-  four runs 0.007–0.013) — indistinguishable from the tuned RF's
-  native 0.010, without moving AUC. A load-bearing Section 4 finding.
-- **Tests** — `tests/test_calibration.py`, 12 cases, 95% coverage. Includes
-  synthetic well-calibrated and miscalibrated fixtures, monotonicity
-  check on isotonic output, Brier-decomposition identity, and an e2e
-  test against the committed `seed_42` artefacts.
+- Raw transformer ECE 0.26 → 0.011 ± 0.003 post-Platt (range 0.007–0.013
+  across the four runs; MTLM seed 0.007). AUC unchanged; matches the
+  RF's 0.010.
+- Tests — `tests/test_calibration.py`, 12 cases, 95% cov. Synthetic well-
+  and mis-calibrated fixtures, isotonic monotonicity, Brier-decomposition
+  identity, e2e against committed `seed_42` artefacts.
 
-### Added — Phase 11A: subgroup fairness audit (Novelty N10; `src/fairness.py`, ~500 LOC)
+### Added — Phase 11A: subgroup fairness audit (N10; `src/fairness.py`, ~500 LOC)
 
-- **SubgroupMetrics** dataclass and `audit_attribute()` — per-subgroup n,
-  base rate, selection rate, TPR, FPR, AUC, ECE, Brier.
-- **Disparity table** — demographic-parity difference, equal-opportunity
-  violation, equalised-odds violation, AUC / ECE disparity. Reference
-  subgroup = largest by n (most reliable stats).
-- **Underpowered flag** — any subgroup with n < 50 is marked
-  `underpowered=True` rather than silently dropped.
-- **Plots** — `figures/fairness_disparity.png` (grouped bar per metric),
+- `SubgroupMetrics` + `audit_attribute()`: per-subgroup n, base rate,
+  selection rate, TPR, FPR, AUC, ECE, Brier.
+- Disparity table: demographic-parity Δ, equal-opportunity violation,
+  equalised-odds violation, AUC/ECE disparity. Reference subgroup is
+  the largest by n.
+- Subgroups with n < 50 → `underpowered=True` rather than silently dropped.
+- Plots: `figures/fairness_disparity.png` +
   `figures/fairness_reliability_{sex,education,marriage}.png`.
-- **Key findings**: Male vs Female demographic-parity Δ = +0.02 (small);
-  EDUCATION "Other" (n=61) shows AUC drop of 0.19–0.31 — not reportable
-  but flagged.
-- **Tests** — `tests/test_fairness.py`, 7 cases, 92% coverage.
+- Male vs Female demographic-parity Δ = +0.02. EDUCATION "Other" (n=61)
+  drops 0.19–0.31 AUC → flagged, not reported.
+- Tests — `tests/test_fairness.py`, 7 cases, 92% cov.
 
-### Added — Phase 11B: MC-dropout uncertainty (Novelty N11; `src/uncertainty.py`, ~470 LOC)
+### Added — Phase 11B: MC-dropout uncertainty (N11; `src/uncertainty.py`, ~470 LOC)
 
-- **`enable_dropout()`** — flips only `nn.Dropout*` submodules to train
-  mode (LayerNorm left alone so γ/β stay fixed).
-- **`mc_dropout_predict()`** — T stochastic forward passes with
-  per-sample re-seeding; returns `(T, N)` probability matrix.
-- **`uncertainty_from_samples()`** — posterior mean/std, predictive
-  entropy, aleatoric entropy, mutual information (BALD).
-- **`refuse_curve()`** — accuracy + AUC on retained subset as abstention
-  fraction increases. Supports `predictive_entropy`, `mutual_info`,
-  or `std` as the ranking signal.
-- **CLI** writes `results/uncertainty/mc_dropout.npz` (per-row arrays +
-  raw `(T, N)` probs for downstream analyses),
-  `uncertainty_summary.json`, `refuse_curve.csv`, plus
-  `figures/uncertainty_refuse_curve.png` and
+- `enable_dropout()` flips only `nn.Dropout*` submodules to train mode;
+  LayerNorm γ/β stay fixed.
+- `mc_dropout_predict()` runs T stochastic passes with per-sample
+  re-seeding, returns (T, N) probabilities.
+- `uncertainty_from_samples()`: posterior mean/std, predictive entropy,
+  aleatoric entropy, mutual information (BALD).
+- `refuse_curve()`: accuracy + AUC on the retained subset as abstention
+  grows. Ranking signal ∈ {predictive_entropy, mutual_info, std}.
+- CLI writes `results/uncertainty/mc_dropout.npz` (per-row arrays +
+  raw (T, N) probabilities), `uncertainty_summary.json`,
+  `refuse_curve.csv`, `figures/uncertainty_refuse_curve.png`,
   `figures/uncertainty_entropy_hist.png`.
-- **Key finding**: deferring top 50% most-uncertain rows raises retained
-  AUC from 0.779 → 0.85 — "refuse to predict" is viable on this dataset.
-- **Tests** — `tests/test_uncertainty.py`, 7 cases, 95% coverage.
+- Deferring top 50% most-uncertain: retained AUC 0.779 → 0.850.
+- Tests — `tests/test_uncertainty.py`, 7 cases, 95% cov.
 
-### Added — Phase 12: statistical significance testing (`src/significance.py`, ~610 LOC)
+### Added — Phase 12: significance testing (`src/significance.py`, ~610 LOC)
 
-- **`mcnemar_test()`** — exact binomial for small discordant counts,
-  chi-sq with continuity correction otherwise.
-- **`delong_auc_test()`** — O(N log N) DeLong via Sun & Xu (2014)
-  mid-rank structural components; returns Z, p-value, 95% CI on
-  `AUC_a − AUC_b`.
-- **`paired_bootstrap()`** — resamples jointly on both models for any
-  metric (AUC, AUC-PR, F1, Brier, ECE, accuracy).
-- **`bh_fdr()`** — Benjamini-Hochberg q-values + rejection mask at a
-  chosen FDR level. Applied per (test, metric) family in the run-all
-  pipeline.
-- **`min_n_for_auc_difference()`** — Hanley-McNeil closed-form power
-  calculator.
-- **Pairwise CLI** runs every test on every model pair; artefacts:
-  `results/significance/pairwise_tests.csv`, `power_analysis.csv`,
-  `figures/significance_pvalue_heatmap.png`.
-- **Honest finding**: DeLong RF-vs-transformer AUC p = 0.023 raw, q = 0.23
-  BH-adjusted across 15 pairs — **no significant AUC gap at FDR 0.05**.
-  Power analysis: 4.5K test split has 80% power for gaps ≥ 0.02 only.
-- **Tests** — `tests/test_significance.py`, 14 cases, 69% coverage on
-  the CLI+plot surface.
+- `mcnemar_test()`: exact binomial on small discordant counts, chi-sq
+  with continuity correction otherwise.
+- `delong_auc_test()`: O(N log N) DeLong via Sun & Xu (2014) mid-rank
+  structural components. Returns Z, p, 95% CI on `AUC_a − AUC_b`.
+- `paired_bootstrap()`: joint resampling for any metric (AUC, AUC-PR,
+  F1, Brier, ECE, accuracy).
+- `bh_fdr()`: Benjamini-Hochberg q-values + rejection mask, per
+  (test, metric) family.
+- `min_n_for_auc_difference()`: Hanley-McNeil closed-form power.
+- Pairwise CLI writes `results/significance/pairwise_tests.csv`,
+  `power_analysis.csv`, `figures/significance_pvalue_heatmap.png`.
+- DeLong RF-vs-transformer AUC: p = 0.023 raw, q = 0.23 after BH over
+  15 pairs. 4,500-row test split has 80% power only for AUC gaps ≥ 0.02.
+- Tests — `tests/test_significance.py`, 14 cases, 69% cov on CLI + plotting.
 
 ### Added — Phase 14A: reproducibility harness (`src/repro.py`, ~340 LOC)
 
-- **Six-check regeneration report**: artefacts exist, transformer-run
-  files intact, python/torch pinned, git-tree status, RF predictions
-  bit-parity, `evaluate.py` bit-parity.
-- **`python src/repro.py`** returns exit code 0 when every derivative
-  artefact matches its committed copy to `rtol=1e-4, atol=1e-6`.
-  Suitable as a CI gate.
-- **`docs/REPRODUCIBILITY.md`** — per-artefact determinism classification
-  (bit-stable vs approximately-deterministic vs stochastic-by-design).
-- **Tests** — `tests/test_repro.py`, 8 cases, 72% coverage.
+- Six-check regeneration report: artefact presence, transformer run
+  files, python/torch pins, git-tree status, RF-prediction bit-parity,
+  `evaluate.py` bit-parity.
+- `python src/repro.py` exits 0 when every derivative artefact matches
+  its committed copy at `rtol=1e-4, atol=1e-6`. CI gate.
+- `docs/REPRODUCIBILITY.md` classes each artefact as bit-stable,
+  approximately deterministic, or stochastic by design.
+- Tests — `tests/test_repro.py`, 8 cases, 72% cov.
 
-### Added — Phase 14B: Model Card + Data Sheet (Novelty N12)
+### Added — Phase 14B: Model Card + Data Sheet (N12)
 
-- **`docs/MODEL_CARD.md`** — Mitchell et al. 2019 format. Intended use,
-  out-of-scope, performance table with pre/post Platt ECE, subgroup
-  fairness numbers, calibration deployment recommendation, full
+- `docs/MODEL_CARD.md`: intended use, out-of-scope, pre/post-Platt ECE
+  table, Phase 11A subgroup numbers, deploy-with-Platt recommendation,
   artefact locations.
-- **`docs/DATA_SHEET.md`** — Gebru et al. 2021 format. Motivation,
-  composition (23 features by block), collection process, preprocessing,
-  permitted vs prohibited uses, failure modes already observed.
+- `docs/DATA_SHEET.md`: motivation, 23-feature composition, collection,
+  preprocessing, permitted vs prohibited uses, observed failure modes.
 
 ### Added — Post-PR #12 review items
 
-- **`src/rf_predictions.py`** — refits the tuned RF from committed
-  `rf_config.json` and persists per-row test probabilities in the same
-  NPZ layout as `train.py`. Required by calibration / fairness /
-  significance modules. Bit-stable vs committed (max |Δp| = 0.0).
-- **`src/evaluate.py`** — `ensemble_run()` builds an arithmetic or
-  geometric-mean-of-logit ensemble row from the per-seed runs;
-  `load_rf_from_predictions()` prefers the raw RF probability vector
-  over the aggregate CSV, populating the RF tuned row with ECE / Brier /
-  kappa / specificity. New `--rf-predictions` and `--ensemble-mode`
-  CLI flags.
-- **`results/comparison_table.csv`** now includes a `Transformer
-  ensemble (arithmetic, n=3)` row and an RF-tuned row with every
-  metric in `REPORTED_METRICS` populated.
-- **Tests** — `tests/test_evaluate_ensemble.py` (7 cases),
-  `tests/test_rf_predictions.py` (5 cases). Together with the phase
-  modules above, **pytest suite count: 235 → 297 (+62 tests)**.
+- `src/rf_predictions.py` refits the tuned RF from committed
+  `rf_config.json`, persists per-row test probabilities in train.py's
+  NPZ layout. Bit-stable vs committed (max |Δp| = 0.0). Feeds
+  calibration / fairness / significance.
+- `src/evaluate.py`: `ensemble_run()` for arithmetic or
+  geometric-mean-of-logit ensembles; `load_rf_from_predictions()`
+  prefers the raw RF probability vector over the aggregate CSV so the
+  RF-tuned row can report ECE / Brier / kappa / specificity. New
+  `--rf-predictions` + `--ensemble-mode` flags.
+- `results/comparison_table.csv`: adds a `Transformer ensemble
+  (arithmetic, n=3)` row + RF-tuned row with every metric in
+  `REPORTED_METRICS`.
+- Tests — `tests/test_evaluate_ensemble.py` (7) + `tests/test_rf_predictions.py`
+  (5). Suite grows from 235 → 297 (+62).
 
 ### Docs
 
-- **PROJECT_PLAN.md** — status markers for Phases 8, 11, 11A, 11B, 12,
-  14A, 14B flipped from `[TODO]` to `[DONE]` with one-line result
-  summaries per section.
-- **README.md** (next commit) — adds a "Section 4 evidence pack" table
-  pointing every coursework-Section-4 claim at its source artefact.
+- `PROJECT_PLAN.md` — Phase 8, 11, 11A, 11B, 12, 14A, 14B status
+  markers flipped [TODO] → [DONE] with one-line results.
+- `README.md` — Section 4 evidence pack table links every Section 4
+  claim to its source artefact.
 
 ---
 

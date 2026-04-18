@@ -1,59 +1,7 @@
-"""
-fairness.py — Phase 11A: Subgroup fairness & robustness audit (Novelty N10).
-
-Motivation
-----------
-The UCI Credit dataset carries three protected-attribute-adjacent features:
-``SEX ∈ {1 (M), 2 (F)}``, ``EDUCATION ∈ {1..4}`` (after merging 0/5/6→4),
-and ``MARRIAGE ∈ {1..3}`` (after merging 0→3). A model that is globally
-accurate but systematically under- or over-predicts default for one
-subgroup violates several standard fairness criteria that directly map to
-UK Equality Act / EU AI Act concerns:
-
-* **Demographic parity (DP)**  — equal positive-prediction rates across
-  subgroups: ``P(Ŷ=1 | A=a) = P(Ŷ=1 | A=a')``.
-* **Equal opportunity (EO)**   — equal true-positive rates among the
-  actually-positive: ``P(Ŷ=1 | Y=1, A=a)``.
-* **Equalised odds (EO₂)**     — EO *plus* equal false-positive rates
-  ``P(Ŷ=1 | Y=0, A=a)``.
-* **Calibration parity**       — each subgroup gets a score that is
-  calibrated on its own slice (not just globally).
-
-These criteria cannot all hold simultaneously for a non-trivial classifier
-on a non-trivial base-rate-heterogeneous population (Kleinberg-Mullainathan-
-Raghavan 2016 impossibility). The audit surfaces *which* criterion the
-model violates and by how much — that is the honest contribution in a
-coursework context.
-
-This is N10 on the Plan's novelty register.
-
-Design
-------
-* Subgroup rows come from ``data/processed/test_raw.csv`` (raw categorical
-  labels) — the scaled split has been standardised and can't be recovered
-  directly. We align by row order, which matches train/test pipeline in
-  ``data_preprocessing.py`` (no shuffling between raw and scaled).
-* Metrics per subgroup: n, base rate, positive-prediction rate, AUC-ROC,
-  ECE, Brier, TPR, FPR, selection rate.
-* Disparity tables computed against a reference subgroup (argmin base rate
-  by default — the "worst-off" group, a common convention). Both
-  **difference** and **ratio** (a.k.a. "disparate-impact" or 80% rule)
-  reported, because different regulations use different forms.
-* Subgroup-level reliability diagrams written as a figure for the report.
-
-Outputs
--------
-* ``results/fairness/subgroup_metrics.csv`` — one row per (run, attribute,
-  subgroup, calibrator) with every metric.
-* ``results/fairness/fairness_summary.json`` — structured bundle.
-* ``figures/fairness_disparity.png`` — grouped bar chart of
-  disparate-impact ratios per attribute.
-* ``figures/fairness_subgroup_reliability.png`` — per-subgroup reliability
-  curves on the tuned transformer (post-Platt calibration).
-
-References: Plan §13.5 / N10, Hardt et al. (2016), Chouldechova (2017),
-Kleinberg-Mullainathan-Raghavan (2016).
-"""
+"""Subgroup fairness audit across SEX / EDUCATION / MARRIAGE. Per-subgroup
+metrics + disparities vs the largest-n subgroup. DP, EO, and equalised
+odds can't all hold together here (KMR 2016) — we report all three and
+let the reader pick their poison."""
 
 from __future__ import annotations
 
@@ -81,7 +29,21 @@ from calibration import (  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
-# Human-readable labels for the subgroup codes.
+__all__ = [
+    "SubgroupMetrics",
+    "audit_attribute",
+    "audit_run",
+    "disparity_table",
+    "plot_disparity",
+    "plot_subgroup_reliability",
+    "main",
+    "ATTRIBUTE_LABELS",
+    "SEX_LABELS",
+    "EDUCATION_LABELS",
+    "MARRIAGE_LABELS",
+    "MIN_SUBGROUP_N",
+]
+
 SEX_LABELS = {1: "Male", 2: "Female"}
 EDUCATION_LABELS = {
     1: "Grad school", 2: "University", 3: "High school", 4: "Other",
@@ -94,14 +56,8 @@ ATTRIBUTE_LABELS: Dict[str, Dict[int, str]] = {
     "MARRIAGE": MARRIAGE_LABELS,
 }
 
-# Minimum subgroup size we'll audit. Smaller slices generate huge CIs and
-# are not publishable — we still record them but flag as underpowered.
+# CIs blow up below this. Row still recorded, just flagged.
 MIN_SUBGROUP_N = 50
-
-
-# ──────────────────────────────────────────────────────────────────────────────
-# Subgroup metric computation
-# ──────────────────────────────────────────────────────────────────────────────
 
 
 @dataclass
@@ -136,7 +92,7 @@ def _subgroup_metrics(
     selection_rate = float(y_pred.mean()) if n > 0 else float("nan")
     base_rate = float(y.mean()) if n > 0 else float("nan")
 
-    # AUC requires both classes present; guard against degeneracy.
+    # AUC needs both classes
     if pos.any() and neg.any():
         auc = float(roc_auc_score(y, p))
     else:
@@ -185,20 +141,10 @@ def audit_attribute(
     return out
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Disparity aggregation
-# ──────────────────────────────────────────────────────────────────────────────
-
-
 def disparity_table(
     subgroups: Sequence[SubgroupMetrics],
 ) -> pd.DataFrame:
-    """Compute per-attribute disparity metrics.
-
-    Reference subgroup = the one with the *largest* n (most reliable
-    statistic). All differences/ratios are ``subgroup − reference`` or
-    ``subgroup / reference`` so positive = subgroup has the higher value.
-    """
+    """Subgroup − reference deltas/ratios. Reference = largest-n subgroup."""
     df = pd.DataFrame([s.__dict__ for s in subgroups])
     if df.empty:
         return df
@@ -231,24 +177,19 @@ def disparity_table(
     return pd.DataFrame(rows)
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Plots
-# ──────────────────────────────────────────────────────────────────────────────
-
-
 def plot_disparity(disp_df: pd.DataFrame, out_path: Path) -> None:
-    """One grouped bar chart per metric showing disparity across attributes."""
+    """One grouped bar per fairness metric."""
     if disp_df.empty:
         return
     metrics_to_plot = [
-        ("demographic_parity_diff", "Demographic parity Δ"),
+        ("demographic_parity_diff", "Demographic parity delta"),
         ("equal_opportunity_violation", "Equal-opportunity violation"),
         ("equalised_odds_violation", "Equalised-odds violation"),
-        ("ece_diff", "ECE Δ"),
+        ("ece_diff", "ECE delta"),
     ]
     fig, axes = plt.subplots(1, len(metrics_to_plot),
                              figsize=(5 * len(metrics_to_plot), 4))
-    # Use only one run for the plot, prefer the ensemble-like aggregate if present.
+    # first run only — story is the same across runs
     priority = disp_df["run"].unique().tolist()
     df = disp_df[disp_df["run"] == priority[0]]
     for ax, (col, title) in zip(axes, metrics_to_plot):
@@ -262,7 +203,7 @@ def plot_disparity(disp_df: pd.DataFrame, out_path: Path) -> None:
         ax.set_ylabel(col)
         ax.grid(axis="y", alpha=0.3)
         ax.tick_params(axis="x", rotation=30)
-    fig.suptitle(f"Subgroup disparities — {priority[0]}", fontsize=12)
+    fig.suptitle(f"Subgroup disparities ({priority[0]})", fontsize=12)
     fig.tight_layout()
     fig.savefig(out_path, dpi=150)
     plt.close(fig)
@@ -272,8 +213,7 @@ def plot_subgroup_reliability(
     y: np.ndarray, p: np.ndarray, attribute_values: np.ndarray,
     attribute_name: str, out_path: Path, n_bins: int = 10,
 ) -> None:
-    """One reliability curve per subgroup, all on the same axes. Good for
-    spotting calibration drift across groups."""
+    """One reliability curve per subgroup on shared axes."""
     fig, ax = plt.subplots(figsize=(6, 6))
     ax.plot([0, 1], [0, 1], ls="--", lw=1.0, color="#999999",
             label="Perfect calibration")
@@ -300,17 +240,12 @@ def plot_subgroup_reliability(
                 label=f"{labels.get(int(v), str(v))} (n={mask.sum()})")
     ax.set_xlabel("Mean predicted probability")
     ax.set_ylabel("Observed default rate")
-    ax.set_title(f"Subgroup reliability — {attribute_name}")
+    ax.set_title(f"Subgroup reliability ({attribute_name})")
     ax.legend(fontsize=9, loc="upper left")
     ax.grid(alpha=0.3)
     fig.tight_layout()
     fig.savefig(out_path, dpi=150)
     plt.close(fig)
-
-
-# ──────────────────────────────────────────────────────────────────────────────
-# End-to-end
-# ──────────────────────────────────────────────────────────────────────────────
 
 
 def audit_run(
@@ -319,8 +254,9 @@ def audit_run(
     attribute_names: Sequence[str] = ("SEX", "EDUCATION", "MARRIAGE"),
     threshold: float = 0.5,
 ) -> Tuple[List[SubgroupMetrics], Dict[str, np.ndarray]]:
-    """Audit a single transformer run. Returns per-subgroup metrics plus
-    the (y_test, p_test_calibrated) arrays for downstream plots."""
+    """Audit a single run. Row-order alignment with test_raw.csv is the
+    no-shuffle contract in data_preprocessing.py — break that and the
+    length check below will catch it."""
     run_dir = Path(run_dir)
     val = np.load(run_dir / "val_predictions.npz")
     test = np.load(run_dir / "test_predictions.npz")
@@ -337,13 +273,13 @@ def audit_run(
     if len(y_test) != len(test_raw):
         raise ValueError(
             f"Test split row count mismatch: predictions={len(y_test)}, "
-            f"raw={len(test_raw)} — check alignment."
+            f"raw={len(test_raw)}. Check alignment."
         )
 
     results: List[SubgroupMetrics] = []
     for attr in attribute_names:
         if attr not in test_raw.columns:
-            logger.warning("Attribute %s missing from test_raw.csv — skipping", attr)
+            logger.warning("Attribute %s missing from test_raw.csv, skipping", attr)
             continue
         values = test_raw[attr].astype(int).values
         results.extend(audit_attribute(
@@ -362,9 +298,8 @@ def audit_run(
 def _build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         description=(
-            "Phase 11A fairness audit — subgroup metrics & disparity "
-            "across SEX / EDUCATION / MARRIAGE on the tuned transformer "
-            "run(s) and the RF baseline."
+            "Subgroup fairness audit (SEX / EDUCATION / MARRIAGE) on the "
+            "tuned transformer run(s) and the RF baseline."
         ),
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
@@ -380,8 +315,7 @@ def _build_parser() -> argparse.ArgumentParser:
                    default=["SEX", "EDUCATION", "MARRIAGE"])
     p.add_argument("--threshold", type=float, default=0.5)
     p.add_argument("--no-platt", action="store_true",
-                   help="Audit raw (un-calibrated) probabilities instead of "
-                        "the post-Platt-scaled ones.")
+                   help="Audit raw probs instead of Platt-scaled ones.")
     p.add_argument("--output-dir", type=Path, default=Path("results/fairness"))
     p.add_argument("--figures-dir", type=Path, default=Path("figures"))
     return p
@@ -397,7 +331,7 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     test_raw_path = Path(args.test_raw)
     if not test_raw_path.is_file():
-        logger.error("Missing %s — run preprocessing first.", test_raw_path)
+        logger.error("Missing %s; run preprocessing first.", test_raw_path)
         return 1
     test_raw = pd.read_csv(test_raw_path)
 
@@ -408,7 +342,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     for run_dir in args.runs:
         run_dir = Path(run_dir)
         if not (run_dir / "test_predictions.npz").is_file():
-            logger.warning("Skipping %s — no predictions", run_dir)
+            logger.warning("Skipping %s, no predictions", run_dir)
             continue
         results, extras = audit_run(
             run_dir, test_raw,
@@ -421,8 +355,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             primary_extras = extras
             primary_run = run_dir.name
 
-    # RF — audit the tuned RF using its raw probabilities (already well
-    # calibrated globally, so no Platt needed).
+    # RF is already ~calibrated globally — skip Platt
     rf_dir = Path(args.rf_dir)
     if (rf_dir / "test_predictions.npz").is_file():
         rf = np.load(rf_dir / "test_predictions.npz")
@@ -458,9 +391,8 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     fig_disp = args.figures_dir / "fairness_disparity.png"
     plot_disparity(df_disp, fig_disp)
-    logger.info("Disparity plot → %s", fig_disp)
+    logger.info("Disparity plot -> %s", fig_disp)
 
-    # Per-attribute subgroup reliability on the primary run.
     if primary_extras is not None:
         for attr in args.attributes:
             if attr in primary_extras:
@@ -469,7 +401,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                     primary_extras["y_test"], primary_extras["p_test"],
                     primary_extras[attr], attr, fig_path,
                 )
-                logger.info("Subgroup reliability (%s) → %s", attr, fig_path)
+                logger.info("Subgroup reliability (%s) -> %s", attr, fig_path)
 
     print()
     print("-- Subgroup metrics (abridged) --")

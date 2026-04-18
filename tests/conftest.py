@@ -1,8 +1,4 @@
-"""
-Shared pytest fixtures.
-
-All fixtures are read-only — tests never mutate the cached preprocessed data.
-"""
+"""Session fixtures — never mutate the cached preprocessed frame."""
 
 from __future__ import annotations
 
@@ -15,7 +11,6 @@ import pandas as pd
 import pytest
 import torch
 
-# Make src/ importable before any test is collected.
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SRC_DIR = REPO_ROOT / "src"
 if str(SRC_DIR) not in sys.path:
@@ -50,7 +45,6 @@ def train_df(repo_root) -> pd.DataFrame:
 
 @pytest.fixture(scope="session")
 def train_df_small(train_df) -> pd.DataFrame:
-    """128 rows — fast for unit tests."""
     return train_df.head(128).reset_index(drop=True)
 
 
@@ -70,5 +64,4 @@ def small_dataset(train_df_small, cat_vocab):
 
 @pytest.fixture()
 def seeded_rng():
-    """Generator seeded at 42 — fresh per test to prevent leakage."""
     return torch.Generator().manual_seed(42)

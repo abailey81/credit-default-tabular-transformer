@@ -1,10 +1,4 @@
-"""Tests for src/visualise.py.
-
-Plot correctness can only really be confirmed by eye, so these tests focus
-on what's easy to verify programmatically: every entry point writes a
-non-empty PNG, the reliability binning handles edge cases without dividing
-by zero, and --help renders cleanly.
-"""
+"""visualise.py — PNG output, reliability-bin edges, CLI."""
 
 from __future__ import annotations
 
@@ -23,20 +17,11 @@ if str(SRC) not in sys.path:
 import visualise as vis  # noqa: E402
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Fixtures
-# ──────────────────────────────────────────────────────────────────────────────
-
-
 @pytest.fixture
 def fake_runs() -> List[Dict[str, Any]]:
-    """Two synthetic runs with known shapes. Avoids needing real trained
-    predictions so the test is independent of data/ state."""
     rng = np.random.default_rng(0)
     n = 500
     y_true = rng.integers(0, 2, size=n)
-    # Two different "models" with different probability calibration, just
-    # so the plots have something visually distinguishable.
     return [
         {
             "run_name": "seed_42",
@@ -62,11 +47,6 @@ def fake_rf_ref() -> Dict[str, float]:
     return {"auc_roc": 0.7845, "auc_pr": 0.5673}
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Individual plot functions produce a non-empty PNG
-# ──────────────────────────────────────────────────────────────────────────────
-
-
 def test_plot_roc_curves_writes_png(tmp_path: Path, fake_runs, fake_rf_ref):
     out = tmp_path / "roc.png"
     vis.plot_roc_curves(fake_runs, fake_rf_ref, out)
@@ -74,8 +54,6 @@ def test_plot_roc_curves_writes_png(tmp_path: Path, fake_runs, fake_rf_ref):
 
 
 def test_plot_roc_curves_without_rf_reference(tmp_path: Path, fake_runs):
-    """RF reference is optional — the function should still render when
-    rf_metrics.csv is missing."""
     out = tmp_path / "roc.png"
     vis.plot_roc_curves(fake_runs, None, out)
     assert out.is_file() and out.stat().st_size > 0
@@ -99,14 +77,7 @@ def test_plot_reliability_diagrams_writes_png(tmp_path: Path, fake_runs):
     assert out.is_file() and out.stat().st_size > 0
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Reliability binning — edge cases
-# ──────────────────────────────────────────────────────────────────────────────
-
-
 def test_reliability_bins_handles_empty_bins():
-    """Probabilities clustered in one region must not produce NaN or crash —
-    empty bins should simply be omitted from the returned arrays."""
     y_true = np.array([0, 1, 0, 1, 0])
     y_prob = np.array([0.1, 0.15, 0.05, 0.12, 0.08])  # all in one bin
     means, rates = vis._reliability_bins(y_true, y_prob, n_bins=10)
@@ -117,19 +88,11 @@ def test_reliability_bins_handles_empty_bins():
 
 
 def test_reliability_bins_endpoint_handling():
-    """A probability of exactly 1.0 must land in the final bin, not be lost
-    between bin boundaries."""
+    # p = 1.0 must land in the final bin, not vanish between boundaries
     y_true = np.array([1, 0])
     y_prob = np.array([1.0, 0.0])
     means, rates = vis._reliability_bins(y_true, y_prob, n_bins=10)
-    # Both points accounted for — the two separate bins should each have
-    # one point.
     assert len(means) == 2
-
-
-# ──────────────────────────────────────────────────────────────────────────────
-# CLI
-# ──────────────────────────────────────────────────────────────────────────────
 
 
 def test_build_parser_help_renders_without_error(capsys):
@@ -141,15 +104,7 @@ def test_build_parser_help_renders_without_error(capsys):
     assert "--output-dir" in captured.out
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-# End-to-end — main() against real committed predictions
-# ──────────────────────────────────────────────────────────────────────────────
-
-
 def test_main_produces_all_five_figures(tmp_path: Path):
-    """Run the full pipeline against the committed results/ directory and
-    check every expected PNG gets written. Skips if the seed_42 run isn't
-    present (e.g. on a fresh clone where nothing has been trained yet)."""
     seed_42 = REPO / "results" / "transformer" / "seed_42"
     if not (seed_42 / "test_predictions.npz").is_file():
         pytest.skip("no committed training artefacts; skipping end-to-end test")

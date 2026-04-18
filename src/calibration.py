@@ -1,60 +1,7 @@
-"""
-calibration.py — Phase 11: post-hoc probability calibration.
-
-The Phase 8 comparison table reveals a ~20× gap in Expected Calibration
-Error between the transformer (ECE ≈ 0.26) and the tuned Random Forest
-(ECE ≈ 0.012) even though their AUC-ROC scores are within 0.005 of each
-other. In a credit-risk deployment this calibration gap is load-bearing:
-Basel-III capital reserves scale with ``P(default_i) · LGD · EAD_i``, so a
-miscalibrated probability directly misprices risk.
-
-This module implements the four calibrators discussed in Plan §13.3
-(A20) — temperature scaling, Platt scaling, and isotonic regression,
-plus a no-op "identity" baseline — fits them on the held-out validation
-split, and reports the per-calibrator ECE / MCE / Brier / Brier-
-decomposition on the test split. Every calibrator exposes the same
-``fit(y_val, p_val) → transform(p_test) → p_test_cal`` interface so they
-plug interchangeably into the downstream pipeline.
-
-Design choices & implementation notes
--------------------------------------
-* Temperature scaling operates in log-odds space. We recover logits from
-  stored probabilities via ``logit = log(p / (1-p))`` — exact up to
-  numerical precision after clipping away 0.0/1.0. We minimise the
-  negative log-likelihood (``-Σ y·log σ(z/T) + (1-y)·log σ(-z/T)``) with
-  bounded Brent search on ``T ∈ [0.05, 10]``. This is Guo et al. (2017)
-  "On Calibration of Modern Neural Networks", single-parameter form.
-* Platt scaling is ``σ(a·logit + b)`` where ``(a, b)`` come from a
-  logistic regression on the validation logits — implemented directly
-  rather than via sklearn so the dependency surface stays minimal.
-* Isotonic regression via sklearn; we cap at ``y_min=0, y_max=1`` and
-  set ``out_of_bounds="clip"`` so the function is well-defined outside
-  the training support.
-* Brier decomposition follows Murphy (1973): ``Brier = reliability –
-  resolution + uncertainty``, with equal-width bins on the predicted
-  probability. We expose the three components individually; all are
-  positive, and ``resolution - reliability`` is a proper scoring-rule
-  "skill score".
-* ECE offered in both equal-width (default) and equal-mass ("quantile")
-  bins — equal-mass better handles skewed probability distributions where
-  most predictions sit in the low-probability region and equal-width bins
-  become near-empty there.
-
-Artefacts written by ``main()``
--------------------------------
-* ``results/calibration/calibration_metrics.csv`` — one row per
-  (run, calibrator) pair with ECE_equal_width, ECE_equal_mass, MCE,
-  Brier, reliability, resolution, uncertainty, AUC-ROC (unchanged, sanity
-  check that calibration doesn't shift the ranking).
-* ``results/calibration/calibration_summary.json`` — the full structured
-  output for downstream programmatic consumption.
-* ``figures/calibration_reliability.png`` — reliability diagrams
-  pre/post calibration per calibrator.
-* ``figures/calibration_ece_bar.png`` — grouped bar chart of ECE per
-  run × calibrator.
-
-References: Plan §13 (calibration), §13.2 (ECE/MCE), §13.3 / Ablation A20.
-"""
+"""Post-hoc calibrators (identity / temperature / Platt / isotonic) plus
+ECE, MCE, and Murphy's Brier decomposition. Equal-mass bins are offered
+alongside equal-width because our probs cluster low and the top
+equal-width bins end up near-empty."""
 
 from __future__ import annotations
 
@@ -79,11 +26,31 @@ if str(_THIS_DIR) not in sys.path:
 
 logger = logging.getLogger(__name__)
 
-EPS = 1e-7
+__all__ = [
+    # calibrators
+    "IdentityCalibrator",
+    "TemperatureScaling",
+    "PlattScaling",
+    "IsotonicCalibrator",
+    # result types
+    "BrierDecomposition",
+    "CalibrationResult",
+    # metrics + drivers
+    "expected_calibration_error",
+    "maximum_calibration_error",
+    "brier_decomposition",
+    "calibration_metric_bundle",
+    "calibrate_and_score",
+    "results_to_dataframe",
+    "plot_reliability_panel",
+    "plot_ece_bar",
+    "main",
+    # constants
+    "CALIBRATORS",
+    "EPS",
+]
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Calibrators — all share fit/transform so they plug interchangeably.
-# ──────────────────────────────────────────────────────────────────────────────
+EPS = 1e-7
 
 
 def _clip_probs(p: np.ndarray) -> np.ndarray:
@@ -96,7 +63,7 @@ def _probs_to_logits(p: np.ndarray) -> np.ndarray:
 
 
 def _sigmoid(z: np.ndarray) -> np.ndarray:
-    # Numerically stable elementwise sigmoid.
+    # stable sigmoid
     out = np.empty_like(z, dtype=np.float64)
     pos = z >= 0
     out[pos] = 1.0 / (1.0 + np.exp(-z[pos]))
@@ -106,7 +73,8 @@ def _sigmoid(z: np.ndarray) -> np.ndarray:
 
 
 class IdentityCalibrator:
-    """No-op baseline. Useful for uniform reporting."""
+    """No-op. Here so every calibrator shares the fit/transform API."""
+
     name = "identity"
 
     def fit(self, y: np.ndarray, p: np.ndarray) -> "IdentityCalibrator":
@@ -117,7 +85,7 @@ class IdentityCalibrator:
 
 
 class TemperatureScaling:
-    """Single-parameter logit scaling: ``σ(logit / T)``. Guo et al. 2017."""
+    """σ(z / T). Guo+ 2017."""
 
     name = "temperature"
 
@@ -129,8 +97,7 @@ class TemperatureScaling:
         if T <= 0:
             return float("inf")
         z = logits / T
-        # log σ(z) = -softplus(-z);  log(1-σ(z)) = -softplus(z)
-        # Use np.logaddexp for numerical stability.
+        # logσ(z) = -softplus(-z); log(1-σ(z)) = -softplus(z)
         log_sig = -np.logaddexp(0.0, -z)
         log_1_sig = -np.logaddexp(0.0, z)
         return -float(np.sum(y * log_sig + (1.0 - y) * log_1_sig))
@@ -155,8 +122,7 @@ class TemperatureScaling:
 
 
 class PlattScaling:
-    """Two-parameter logistic regression on the model's logits.
-    Fits ``σ(a·logit + b)`` by IRLS-free Newton descent on the NLL."""
+    """σ(a·z + b). LR on the model's logits."""
 
     name = "platt"
 
@@ -175,9 +141,7 @@ class PlattScaling:
     def fit(self, y: np.ndarray, p: np.ndarray) -> "PlattScaling":
         y = y.astype(np.float64)
         x = _probs_to_logits(p)
-        # Gradient descent on (a, b) — the NLL of a 1D logistic regression
-        # is convex, so any bounded descent converges. Use scipy's BFGS for
-        # robustness rather than rolling our own line search.
+        # convex in (a, b); L-BFGS-B is plenty, no need for IRLS
         from scipy.optimize import minimize
         res = minimize(
             lambda params: self._nll(params[0], params[1], x, y),
@@ -197,7 +161,7 @@ class PlattScaling:
 
 
 class IsotonicCalibrator:
-    """Monotone-non-decreasing piecewise-constant map fitted on (p, y)."""
+    """Monotone step-fn fit on (p, y)."""
 
     name = "isotonic"
 
@@ -226,24 +190,13 @@ CALIBRATORS: Dict[str, type] = {
 }
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Calibration metrics
-# ──────────────────────────────────────────────────────────────────────────────
-
-
 def _bin_indices(p: np.ndarray, n_bins: int, strategy: str) -> np.ndarray:
-    """Assign each probability to a bin.
-
-    * ``equal_width`` — bins span [0, 1] in equal intervals.
-    * ``equal_mass`` (aka quantile) — each bin has approximately the same
-      number of samples. Better when probabilities are concentrated in
-      one region.
-    """
+    """Bin index per row, equal-width or equal-mass."""
     if strategy == "equal_width":
         edges = np.linspace(0.0, 1.0, n_bins + 1)
     elif strategy == "equal_mass":
         edges = np.quantile(p, np.linspace(0.0, 1.0, n_bins + 1))
-        # Avoid collapsed bins on heavily-duplicated probabilities.
+        # heavy ties can collapse bins — dedupe after pinning the endpoints
         edges[0] = 0.0
         edges[-1] = 1.0
         edges = np.unique(edges)
@@ -259,7 +212,7 @@ def expected_calibration_error(
     n_bins: int = 10,
     strategy: str = "equal_width",
 ) -> float:
-    """Sample-weighted ECE = Σ_b (n_b/N) · |acc_b − conf_b|."""
+    """ECE = Σ_b (n_b / N) |acc_b − conf_b|."""
     y = y_true.astype(np.float64)
     p = p.astype(np.float64)
     bins = _bin_indices(p, n_bins, strategy)
@@ -281,7 +234,7 @@ def maximum_calibration_error(
     n_bins: int = 10,
     strategy: str = "equal_width",
 ) -> float:
-    """Worst-case bin gap — relevant for safety-critical thresholding."""
+    """Worst-bin gap. Matters when one decision threshold is safety-critical."""
     y = y_true.astype(np.float64)
     p = p.astype(np.float64)
     bins = _bin_indices(p, n_bins, strategy)
@@ -296,17 +249,10 @@ def maximum_calibration_error(
 
 @dataclass
 class BrierDecomposition:
-    """Murphy (1973) three-component decomposition of the Brier score.
+    """Brier = reliability − resolution + uncertainty (Murphy 1973).
 
-    ``Brier = reliability − resolution + uncertainty``.
-
-    * ``reliability`` (lower is better): weighted squared gap between
-      predicted confidence and observed frequency within each bin.
-    * ``resolution`` (higher is better): how much bin outcomes vary
-      around the overall base rate — the signal the forecaster extracts.
-    * ``uncertainty``: dataset-level base-rate entropy-equivalent (Ȳ(1−Ȳ)).
-      Independent of the forecaster; reported for completeness.
-    """
+    `uncertainty` is base-rate-only, so `resolution − reliability` is the
+    skill score."""
 
     reliability: float
     resolution: float
@@ -365,11 +311,6 @@ def calibration_metric_bundle(
     }
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-# End-to-end pipeline: fit on val, score on test, record everything.
-# ──────────────────────────────────────────────────────────────────────────────
-
-
 @dataclass
 class CalibrationResult:
     run_name: str
@@ -417,11 +358,6 @@ def results_to_dataframe(results: Sequence[CalibrationResult]) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Plots
-# ──────────────────────────────────────────────────────────────────────────────
-
-
 def _reliability_points(
     y: np.ndarray, p: np.ndarray, n_bins: int = 10,
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
@@ -445,7 +381,7 @@ def plot_reliability_panel(
     out_path: Path,
     n_bins: int = 10,
 ) -> None:
-    """One subplot per (label, y_true, p) tuple. Diagonal = perfect."""
+    """Reliability grid, one subplot per panel. Dashed diagonal = perfect."""
     n = len(panels)
     ncols = min(4, max(1, n))
     nrows = int(np.ceil(n / ncols))
@@ -470,26 +406,20 @@ def plot_reliability_panel(
 
 
 def plot_ece_bar(df: pd.DataFrame, out_path: Path) -> None:
-    """Grouped bar chart of ECE per (run, calibrator) — visual summary."""
+    """ECE grouped bars: run × calibrator."""
     fig, ax = plt.subplots(figsize=(8, 5))
     pivot = df.pivot(index="run", columns="calibrator", values="ece_equal_width")
     pivot.plot(kind="bar", ax=ax, width=0.8)
     ax.set_ylabel("ECE (10 equal-width bins)")
-    ax.set_title("Calibration error by run × calibrator — lower is better")
+    ax.set_title("Calibration error by run x calibrator (lower is better)")
     ax.grid(axis="y", alpha=0.3)
     fig.tight_layout()
     fig.savefig(out_path, dpi=150)
     plt.close(fig)
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-# CLI
-# ──────────────────────────────────────────────────────────────────────────────
-
-
 def _load_run_val_test(run_dir: Path) -> Optional[Dict[str, np.ndarray]]:
-    """Return y/p on val and test splits for a single transformer run, or
-    None if the run's artefacts are missing."""
+    """(y, p) on val+test, or None if the run hasn't produced predictions yet."""
     run_dir = Path(run_dir)
     val = run_dir / "val_predictions.npz"
     test = run_dir / "test_predictions.npz"
@@ -509,9 +439,7 @@ def _load_run_val_test(run_dir: Path) -> Optional[Dict[str, np.ndarray]]:
 def _build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         description=(
-            "Phase 11 calibration: fit temperature, Platt, and isotonic "
-            "calibrators on each run's validation split, then score every "
-            "post-hoc-calibrated probability vector on the test split."
+            "Fit T/Platt/isotonic on each run's val split, score on test."
         ),
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
@@ -523,12 +451,10 @@ def _build_parser() -> argparse.ArgumentParser:
             Path("results/transformer/seed_2"),
             Path("results/transformer/seed_42_mtlm_finetune"),
         ],
-        help="Training run directories, each containing val_predictions.npz "
-             "+ test_predictions.npz.",
+        help="Run dirs, each with val_predictions.npz + test_predictions.npz.",
     )
     p.add_argument("--rf-dir", type=Path, default=Path("results/rf"),
-                   help="Optional: RF artefact directory with test_predictions.npz. "
-                        "Included in the table as an additional row for comparison.")
+                   help="Optional RF run dir. Adds a comparison row.")
     p.add_argument("--n-bins", type=int, default=10)
     p.add_argument("--output-dir", type=Path, default=Path("results/calibration"))
     p.add_argument("--figures-dir", type=Path, default=Path("figures"))
@@ -549,7 +475,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     for run_dir in args.runs:
         payload = _load_run_val_test(run_dir)
         if payload is None:
-            logger.warning("Skipping %s — predictions missing", run_dir)
+            logger.warning("Skipping %s, predictions missing", run_dir)
             continue
         results = calibrate_and_score(
             payload["y_val"], payload["p_val"],
@@ -558,8 +484,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             run_name=payload["run_name"],
         )
         all_results.extend(results)
-        # Add a pre-calibration reliability panel + one post-temperature panel
-        # per run for a visual before/after.
+        # one raw + one post-T panel per run
         reliability_panels.append(
             (f"{payload['run_name']} (raw)",
              payload["y_test"], payload["p_test"]))
@@ -568,8 +493,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             (f"{payload['run_name']} (T={ts.temperature_:.2f})",
              payload["y_test"], ts.transform(payload["p_test"])))
 
-    # RF — treat as a run with no calibration applied (it's already a
-    # well-calibrated classifier) so the report shows a clean baseline.
+    # RF is already ~calibrated, so stick it in under identity
     rf_dir = Path(args.rf_dir)
     if (rf_dir / "test_predictions.npz").is_file():
         rf = np.load(rf_dir / "test_predictions.npz")
@@ -580,7 +504,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         reliability_panels.append(("rf_tuned (raw)", rf["y_true"], rf["y_prob"]))
 
     if not all_results:
-        logger.error("No results produced — every run directory was missing predictions.")
+        logger.error("No results produced; every run directory was missing predictions.")
         return 1
 
     df = results_to_dataframe(all_results)
@@ -601,9 +525,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     plot_reliability_panel(reliability_panels, fig_rel, n_bins=args.n_bins)
     plot_ece_bar(df, fig_bar)
 
-    logger.info("Calibration metrics → %s", csv_path)
-    logger.info("Reliability panel   → %s", fig_rel)
-    logger.info("ECE bar chart       → %s", fig_bar)
+    logger.info("Calibration metrics -> %s", csv_path)
+    logger.info("Reliability panel   -> %s", fig_rel)
+    logger.info("ECE bar chart       -> %s", fig_bar)
 
     print()
     display_cols = [
