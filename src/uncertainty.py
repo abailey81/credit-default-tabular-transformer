@@ -318,10 +318,15 @@ def plot_entropy_hist(arrays: UncertaintyArrays, out_path: Path, threshold: floa
 # ──────────────────────────────────────────────────────────────────────────────
 
 
-def _load_model_from_run(run_dir: Path, trust_source: bool = True) -> TabularTransformer:
+def _load_model_from_run(run_dir: Path, trust_source: bool = False) -> TabularTransformer:
     """Construct a :class:`TabularTransformer` from the run's config.json
-    and load the checkpoint weights. ``trust_source=True`` for artefacts we
-    generated ourselves."""
+    and load the checkpoint weights.
+
+    ``trust_source=False`` (default) routes through the ``.weights`` sidecar
+    with ``weights_only=True`` — the SECURITY_AUDIT C-1 safe path.
+    ``trust_source=True`` opts into pickle-bearing torch.load and should
+    only be used for checkpoints the caller produced themselves.
+    """
     run_dir = Path(run_dir)
     cfg = json.loads((run_dir / "config.json").read_text())
 
@@ -375,8 +380,12 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--output-dir", type=Path, default=Path("results/uncertainty"))
     p.add_argument("--figures-dir", type=Path, default=Path("figures"))
-    p.add_argument("--trust-source", action="store_true", default=True,
-                   help="Load our own checkpoints with weights_only=False.")
+    p.add_argument("--trust-source", action="store_true", default=False,
+                   help="Load checkpoints with weights_only=False. Only enable "
+                        "for checkpoints you produced yourself — opts OUT of the "
+                        "SECURITY_AUDIT C-1 safe-default. The `best.pt` bundles "
+                        "we ship include a `.weights` sidecar, so the default "
+                        "(False) works via load_checkpoint's weights-only path.")
     return p
 
 

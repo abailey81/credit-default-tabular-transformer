@@ -1,7 +1,7 @@
 {
   "all_passed": true,
-  "n_checks": 6,
-  "n_passed": 6,
+  "n_checks": 7,
+  "n_passed": 7,
   "checks": [
     {
       "name": "artefacts_exist",
@@ -38,6 +38,15 @@
       }
     },
     {
+      "name": "split_hashes_match",
+      "passed": true,
+      "detail": "10/10 match",
+      "metadata": {
+        "n_files": 10,
+        "mismatches": []
+      }
+    },
+    {
       "name": "python_pins",
       "passed": true,
       "detail": "python + torch pinned",
@@ -46,29 +55,19 @@
     {
       "name": "git_clean",
       "passed": true,
-      "detail": "38 tracked changes",
+      "detail": "10 tracked changes",
       "metadata": {
         "dirty_files": [
           " M CHANGELOG.md",
           " M PROJECT_PLAN.md",
           " M README.md",
-          " M results/comparison_table.csv",
-          " M results/comparison_table.md",
-          " M results/evaluate_summary.json",
-          " M src/evaluate.py",
-          "?? docs/DATA_SHEET.md",
-          "?? docs/MODEL_CARD.md",
-          "?? docs/REPRODUCIBILITY.md",
-          "?? figures/calibration_ece_bar.png",
-          "?? figures/calibration_reliability.png",
-          "?? figures/fairness_disparity.png",
-          "?? figures/fairness_reliability_education.png",
-          "?? figures/fairness_reliability_marriage.png",
-          "?? figures/fairness_reliability_sex.png",
-          "?? figures/significance_pvalue_heatmap.png",
-          "?? figures/uncertainty_entropy_hist.png",
-          "?? figures/uncertainty_refuse_curve.png",
-          "?? results/calibration/"
+          " M docs/MODEL_CARD.md",
+          " M docs/REPRODUCIBILITY.md",
+          " M results/repro/reproducibility_report.json",
+          " M src/repro.py",
+          " M src/uncertainty.py",
+          " M tests/test_repro.py",
+          "?? data/processed/SPLIT_HASHES.md"
         ],
         "is_clean": false
       }

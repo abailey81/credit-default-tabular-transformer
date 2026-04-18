@@ -1878,7 +1878,7 @@ Marking criteria include "writing quality" and "presentation" (25% combined). Cl
 
 ## 16.5 Phase 14A: Reproducibility Guarantees
 
-**Status: [DONE] — `src/repro.py` + `tests/test_repro.py` + `docs/REPRODUCIBILITY.md`. Six-check regeneration harness: artefact presence, transformer-run-file integrity, python/torch pin check, git-clean check, RF-prediction bit-parity (max |Δp| = 0), evaluate.py bit-parity. Single-shot `python src/repro.py` returns exit code 0 when every derivative artefact matches its committed copy.**
+**Status: [DONE] — `src/repro.py` + `tests/test_repro.py` + `docs/REPRODUCIBILITY.md` + `data/processed/SPLIT_HASHES.md`. Seven-check regeneration harness: artefact presence, transformer-run-file integrity, split-hash SHA-256 verification (§16.5.3), python/torch pin check, git-clean check, RF-prediction bit-parity (max |Δp| = 0), evaluate.py bit-parity. Single-shot `python src/repro.py` returns exit code 0 when every derivative artefact matches its committed copy. Known gap: the §16.5.4 Dockerfile is deferred to a later PR; all Python-level pins + split-hash verification are in place.**
 
 "Code runs on my machine" is not a guarantee. We commit to stronger guarantees that any marker can verify in a clean environment.
 

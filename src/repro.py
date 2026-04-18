@@ -254,6 +254,57 @@ def check_rf_predictions_regenerate(repo: Path, scratch: Path) -> Check:
     )
 
 
+def check_split_hashes_match(repo: Path) -> Check:
+    """Verify that every committed pre-processed split file has the
+    SHA-256 hash documented in ``data/processed/SPLIT_HASHES.md``.
+
+    This is Plan §16.5.3 — "Anyone who does not get these hashes has
+    not reproduced the experiment." A hash miss means the data
+    pipeline has drifted and every downstream metric comparison is
+    unsafe.
+    """
+    import re
+    hashes_md = repo / "data" / "processed" / "SPLIT_HASHES.md"
+    if not hashes_md.is_file():
+        return Check(
+            name="split_hashes_match", passed=False,
+            detail=f"missing {hashes_md.relative_to(repo)}",
+        )
+
+    # Parse the "| file | hash |" table rows.
+    expected: Dict[str, str] = {}
+    hash_re = re.compile(r"\|\s*`([^`]+)`\s*\|\s*`([0-9a-f]{64})`\s*\|")
+    for line in hashes_md.read_text().splitlines():
+        m = hash_re.search(line)
+        if m:
+            expected[m.group(1)] = m.group(2)
+    if not expected:
+        return Check(
+            name="split_hashes_match", passed=False,
+            detail="no hash rows parsed from SPLIT_HASHES.md",
+        )
+
+    data_dir = repo / "data" / "processed"
+    mismatches: List[str] = []
+    checked: List[str] = []
+    for name, want in expected.items():
+        path = data_dir / name
+        if not path.is_file():
+            mismatches.append(f"{name}: missing")
+            continue
+        got = _sha256(path)
+        checked.append(name)
+        if got != want:
+            mismatches.append(f"{name}: got {got[:12]}... want {want[:12]}...")
+    ok = not mismatches
+    return Check(
+        name="split_hashes_match", passed=ok,
+        detail=(f"{len(checked)}/{len(expected)} match"
+                if ok else f"{len(mismatches)} mismatches: {mismatches[:3]}"),
+        metadata={"n_files": len(expected), "mismatches": mismatches},
+    )
+
+
 def check_python_pins(repo: Path) -> Check:
     """pyproject.toml should pin Python and torch for reproducibility."""
     p = repo / "pyproject.toml"
@@ -291,6 +342,7 @@ def run_all(repo: Path, scratch: Path) -> Report:
     rep = Report()
     rep.add(check_artefacts_exist(repo))
     rep.add(check_transformer_run_files(repo))
+    rep.add(check_split_hashes_match(repo))
     rep.add(check_python_pins(repo))
     rep.add(check_git_clean(repo))
     rep.add(check_rf_predictions_regenerate(repo, scratch))

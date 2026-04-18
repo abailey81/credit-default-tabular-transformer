@@ -75,6 +75,24 @@ def test_check_python_pins_passes():
     assert c.passed, c.detail
 
 
+def test_split_hashes_check_passes_on_committed_repo():
+    """SPLIT_HASHES.md should match the committed data splits on a clean
+    checkout. If this fails, either the hash file or the data has drifted."""
+    c = repro.check_split_hashes_match(REPO)
+    assert c.name == "split_hashes_match"
+    if not (REPO / "data" / "processed" / "SPLIT_HASHES.md").is_file():
+        pytest.skip("SPLIT_HASHES.md not committed on this branch")
+    assert c.passed, c.detail
+    assert c.metadata["n_files"] >= 4  # at least the raw + metadata files
+
+
+def test_split_hashes_check_fails_gracefully_without_file(tmp_path):
+    c = repro.check_split_hashes_match(tmp_path)
+    assert c.name == "split_hashes_match"
+    assert not c.passed
+    assert "missing" in c.detail.lower()
+
+
 def test_report_summarisation():
     r = repro.Report()
     r.add(repro.Check(name="a", passed=True))

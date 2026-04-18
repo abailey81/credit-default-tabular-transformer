@@ -50,6 +50,27 @@ passing those values back into `train.py`. Small cross-machine drift is
 expected when the hardware's BLAS implementation differs (e.g. Intel
 MKL vs OpenBLAS); the test-set metrics remain within ± 0.001 AUC.
 
+## Data-split hashes (Plan §16.5.3)
+
+`data/processed/SPLIT_HASHES.md` commits the SHA-256 digest of every
+pre-processed split file — the raw, scaled, and engineered CSVs plus
+`feature_metadata.json`. `src/repro.py`'s `split_hashes_match` check
+fails if any file on disk drifts from its committed hash; this is the
+strongest local guarantee short of re-running
+`run_pipeline.py --preprocess-only` from scratch.
+
+## Known gap — Docker image (Plan §16.5.4)
+
+The plan promises a `Dockerfile` pinning `python:3.11.5-slim-bookworm`
+with a `docker build && docker run` one-liner. We have not yet shipped
+that artefact. Rationale: the coursework runs locally and on Colab; a
+Docker image would be a deployment convenience but is not a blocker
+for the marker. Tracked as a separate ticket.
+
+Current local pins (as captured in `pyproject.toml` + `poetry.lock`)
+are sufficient for Python-level reproducibility; the Docker gap matters
+only for hermetic OS-level reproduction.
+
 ## Non-deterministic by design
 
 - `src/uncertainty.py` runs `--n-samples` stochastic forward passes

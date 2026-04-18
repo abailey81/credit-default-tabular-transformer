@@ -57,9 +57,10 @@ committed CSVs + figures + regeneration harness.
   scores on test, and emits `results/calibration/calibration_metrics.csv`,
   `figures/calibration_reliability.png`,
   `figures/calibration_ece_bar.png`.
-- **Headline result**: raw transformer ECE 0.26 → post-Platt **0.008**
-  (matching the tuned RF's 0.010), without moving AUC. A load-bearing
-  Section 4 finding.
+- **Headline result**: raw transformer ECE 0.26 → post-Platt
+  **0.011 ± 0.003** (3-seed mean; MTLM single-seed 0.007; range across
+  four runs 0.007–0.013) — indistinguishable from the tuned RF's
+  native 0.010, without moving AUC. A load-bearing Section 4 finding.
 - **Tests** — `tests/test_calibration.py`, 12 cases, 95% coverage. Includes
   synthetic well-calibrated and miscalibrated fixtures, monotonicity
   check on isotonic output, Brier-decomposition identity, and an e2e

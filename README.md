@@ -97,7 +97,7 @@ Every claim the report makes in Section 4 is backed by a committed artefact in t
 
 | Claim | Backing artefact | Source script |
 |---|---|---|
-| Transformer ECE ≈ 0.26 → **0.008 after Platt** (no AUC loss) | [`results/calibration/calibration_metrics.csv`](results/calibration/calibration_metrics.csv) + [`figures/calibration_reliability.png`](figures/calibration_reliability.png) | [`src/calibration.py`](src/calibration.py) |
+| Transformer ECE ≈ 0.26 → **0.011 ± 0.003 after Platt** (MTLM seed 0.007; indistinguishable from RF's 0.010) — no AUC loss | [`results/calibration/calibration_metrics.csv`](results/calibration/calibration_metrics.csv) + [`figures/calibration_reliability.png`](figures/calibration_reliability.png) | [`src/calibration.py`](src/calibration.py) |
 | RF tuned beats transformer by 0.005 AUC — **not significant** at FDR 0.05 | [`results/significance/pairwise_tests.csv`](results/significance/pairwise_tests.csv) | [`src/significance.py`](src/significance.py) |
 | 4.5K test split has 80% power only for AUC gaps ≥ 0.02 | [`results/significance/power_analysis.csv`](results/significance/power_analysis.csv) | [`src/significance.py`](src/significance.py) |
 | MC-dropout refuse-to-predict: retained AUC 0.779 → 0.85 at 50% abstention | [`results/uncertainty/refuse_curve.csv`](results/uncertainty/refuse_curve.csv) + [`figures/uncertainty_refuse_curve.png`](figures/uncertainty_refuse_curve.png) | [`src/uncertainty.py`](src/uncertainty.py) |

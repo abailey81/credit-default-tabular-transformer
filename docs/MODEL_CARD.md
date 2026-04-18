@@ -75,7 +75,7 @@ fine-tune (n=1).
 
 | Model | AUC-ROC | AUC-PR | ECE (raw) | ECE (Platt) | Brier |
 |---|---|---|---|---|---|
-| Transformer from scratch (n=3) | 0.7797 ± 0.0023 | 0.5592 ± 0.0043 | 0.2589 | **0.009** | 0.209 |
+| Transformer from scratch (n=3) | 0.7797 ± 0.0023 | 0.5592 ± 0.0043 | 0.2589 | **0.011 ± 0.003** | 0.209 |
 | Transformer + MTLM (n=1) | 0.7801 | 0.5605 | 0.2515 | **0.007** | 0.206 |
 | Transformer ensemble (arithmetic, n=3) | 0.7815 | 0.5646 | 0.2606 | — | 0.209 |
 | RF baseline | 0.7654 | 0.5389 | — | — | — |
@@ -98,9 +98,11 @@ noise band on our test set.
 Raw transformer probabilities are poorly calibrated
 (ECE ≈ 0.26) — confidences cluster around the positive-class base rate
 but a small number are over-confident. Post-hoc Platt or isotonic
-scaling fitted on the validation split drops ECE to 0.007 – 0.019
-without moving AUC, matching the RF's calibration level. **Deploy with
-Platt scaling; never the raw logits.** See `results/calibration/` and
+scaling fitted on the validation split drops ECE to a range of
+0.007–0.013 across our four runs (3-seed mean 0.011 ± 0.003; MTLM
+seed 0.007) without moving AUC. This is indistinguishable from the
+tuned RF's native ECE (0.010). **Deploy with Platt scaling; never the
+raw logits.** See `results/calibration/calibration_metrics.csv` and
 `figures/calibration_reliability.png`.
 
 ## 7. Ethical considerations & limitations
