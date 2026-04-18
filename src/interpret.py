@@ -432,7 +432,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         )
 
     summary = {
-        "run_dir": str(args.run_dir),
+        "run_dir": Path(args.run_dir).as_posix(),
         "attention_scores": attn_scores,
         "attention_ranked": sorted(
             attn_scores.items(), key=lambda kv: kv[1], reverse=True,
