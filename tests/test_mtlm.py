@@ -1,14 +1,4 @@
-"""Tests for src/mtlm.py — MTLMHead, mtlm_loss, MTLMModel (Plan §8.5 / Novelty N4).
-
-Scope
------
-- MTLMHead output dict shape + per-feature head types
-- MTLMHead gradient flow
-- mtlm_loss: per-feature-type contributions, entropy / variance
-  normalisation, zero-mask graceful behaviour, checkpoint compatibility
-  with TabularTransformer via MTLMModel.encoder_state_dict()
-- MTLMModel forward + state-dict key compatibility
-"""
+"""MTLMHead / mtlm_loss / MTLMModel (N4, Plan §8.5)."""
 
 from __future__ import annotations
 
@@ -36,12 +26,9 @@ def tiny_cat_vocab_sizes() -> Dict[str, int]:
 
 @pytest.fixture()
 def mtlm_batch() -> Dict[str, Any]:
-    """Batch of size 4 with all six MTLMCollator output keys plus
-    mask_positions selecting tokens across every feature type."""
     B = 4
     mask = torch.zeros(B, 23, dtype=torch.bool)
-    # Mask: one categorical (SEX on row 0), two PAYs (row 1 PAY_0, row 2 PAY_6),
-    # one numerical (row 3 LIMIT_BAL — position 9 in the 23-block).
+    # 1 cat (SEX r0), 2 PAYs (PAY_0 r1, PAY_6 r2), 1 num (LIMIT_BAL r3 @ pos 9)
     mask[0, 0] = True
     mask[1, 3] = True
     mask[2, 8] = True
@@ -67,25 +54,17 @@ def mtlm_batch() -> Dict[str, Any]:
     }
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-# MTLMHead
-# ──────────────────────────────────────────────────────────────────────────────
-
-
 def test_mtlm_head_output_shapes(tiny_cat_vocab_sizes):
     head = MTLMHead(d_model=32, cat_vocab_sizes=tiny_cat_vocab_sizes)
-    hidden = torch.randn(4, 24, 32)  # (B, seq, d_model)
+    hidden = torch.randn(4, 24, 32)
     out = head(hidden)
 
     assert set(out.keys()) == {"cat", "pay", "num"}
-    # Categoricals — per-feature vocab sizes.
     assert out["cat"]["SEX"].shape == (4, 2)
     assert out["cat"]["EDUCATION"].shape == (4, 4)
     assert out["cat"]["MARRIAGE"].shape == (4, 3)
-    # PAY — unified 11-class vocab for every PAY feature.
     for feat in PAY_STATUS_FEATURES:
         assert out["pay"][feat].shape == (4, PAY_RAW_NUM_CLASSES)
-    # Numerical — scalar per feature.
     for feat in NUMERICAL_FEATURES:
         assert out["num"][feat].shape == (4,)
 
@@ -95,7 +74,6 @@ def test_mtlm_head_gradient_flows(tiny_cat_vocab_sizes):
     head.train()
     hidden = torch.randn(4, 24, 32, requires_grad=True)
     out = head(hidden)
-    # Backprop through a reduction of every head's output.
     loss = (
         sum(v.sum() for v in out["cat"].values())
         + sum(v.sum() for v in out["pay"].values())
@@ -113,25 +91,13 @@ def test_mtlm_head_rejects_non_canonical_numerical_order(tiny_cat_vocab_sizes):
         MTLMHead(
             d_model=32,
             cat_vocab_sizes=tiny_cat_vocab_sizes,
-            numerical_features=["LIMIT_BAL"],  # not the canonical order
+            numerical_features=["LIMIT_BAL"],
         )
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-# mtlm_loss
-# ──────────────────────────────────────────────────────────────────────────────
-
-
 def test_mtlm_loss_returns_components_and_backprops(tiny_cat_vocab_sizes, mtlm_batch):
-    """Each feature-type loss component is positive, the joint scalar is
-    finite, and the backward call lands a gradient on the heads for the
-    *specific* features that were masked in the fixture.
-
-    The fixture masks only four positions (SEX on row 0, PAY_0 on row 1,
-    PAY_6 on row 2, LIMIT_BAL on row 3). Heads for never-masked features
-    (EDUCATION, MARRIAGE, most PAYs, most numericals) won't receive any
-    gradient, which is the expected behaviour — the loss is only computed
-    on masked positions — not a bug."""
+    # only heads for the *specifically* masked features should get grad —
+    # unmasked-feature heads at zero grad is correct, not a bug
     head = MTLMHead(d_model=32, cat_vocab_sizes=tiny_cat_vocab_sizes)
     head.train()
     hidden = torch.randn(4, 24, 32, requires_grad=True)
@@ -143,7 +109,6 @@ def test_mtlm_loss_returns_components_and_backprops(tiny_cat_vocab_sizes, mtlm_b
         mask_positions=mtlm_batch["mask_positions"],
     )
     assert isinstance(comps, MTLMLossComponents)
-    # Every feature-type component active given the mask layout in fixture.
     assert comps.cat > 0
     assert comps.pay > 0
     assert comps.num > 0
@@ -151,7 +116,6 @@ def test_mtlm_loss_returns_components_and_backprops(tiny_cat_vocab_sizes, mtlm_b
     assert torch.isfinite(loss)
     loss.backward()
 
-    # Only the heads for the specific masked features must receive gradient.
     masked_features = {
         "cat": ["SEX"],
         "pay": ["PAY_0", "PAY_6"],
@@ -169,8 +133,6 @@ def test_mtlm_loss_returns_components_and_backprops(tiny_cat_vocab_sizes, mtlm_b
 
 
 def test_mtlm_loss_empty_mask_returns_zero(tiny_cat_vocab_sizes, mtlm_batch):
-    """If no tokens are masked, the composite loss is exactly zero — no
-    NaNs from empty stacks, no gradient flow surprises."""
     head = MTLMHead(d_model=32, cat_vocab_sizes=tiny_cat_vocab_sizes)
     hidden = torch.randn(4, 24, 32)
     predictions = head(hidden)
@@ -186,13 +148,9 @@ def test_mtlm_loss_empty_mask_returns_zero(tiny_cat_vocab_sizes, mtlm_batch):
 def test_mtlm_loss_entropy_normalised_within_cross_entropy_bounds(
     tiny_cat_vocab_sizes, mtlm_batch,
 ):
-    """Entropy-normalised CE on a uniform-random head should hover around
-    1.0 (per-feature ``CE / ln(n_cats)`` is the "information-theoretic
-    baseline": a uniform prediction loses exactly ``ln(n)`` nats)."""
+    # uniform preds lose ln(n) nats/feature, so CE / ln(n_cats) ≈ 1.0
     torch.manual_seed(0)
     head = MTLMHead(d_model=32, cat_vocab_sizes=tiny_cat_vocab_sizes)
-    # Zero all head weights — predictions become constant, softmax uniform,
-    # CE per feature ≈ ln(n_cats), entropy-normalised ≈ 1.0.
     with torch.no_grad():
         for lin in (*head.cat_heads.values(), *head.pay_heads.values()):
             lin.weight.zero_()
@@ -200,8 +158,6 @@ def test_mtlm_loss_entropy_normalised_within_cross_entropy_bounds(
     hidden = torch.randn(4, 24, 32)
     predictions = head(hidden)
     _, comps = mtlm_loss(predictions, mtlm_batch, mtlm_batch["mask_positions"])
-    # Each normalised CE is exactly 1.0 under uniform predictions, and the
-    # reported value is the mean across contributing features.
     assert 0.95 < comps.cat < 1.05
     assert 0.95 < comps.pay < 1.05
 
@@ -209,8 +165,6 @@ def test_mtlm_loss_entropy_normalised_within_cross_entropy_bounds(
 def test_mtlm_loss_variance_normalisation_on_numerical(
     tiny_cat_vocab_sizes, mtlm_batch,
 ):
-    """Dividing MSE by a larger variance must scale the numerical component
-    down proportionally."""
     head = MTLMHead(d_model=32, cat_vocab_sizes=tiny_cat_vocab_sizes)
     hidden = torch.randn(4, 24, 32)
     predictions = head(hidden)
@@ -221,13 +175,7 @@ def test_mtlm_loss_variance_normalisation_on_numerical(
                       num_feature_variance=variance_1)
     _, c4 = mtlm_loss(predictions, mtlm_batch, mtlm_batch["mask_positions"],
                       num_feature_variance=variance_4)
-    # Dividing by 4× the variance should give exactly 1/4 of the num loss.
     assert c4.num == pytest.approx(c1.num / 4.0, rel=1e-4)
-
-
-# ──────────────────────────────────────────────────────────────────────────────
-# MTLMModel — integration + checkpoint compatibility with TabularTransformer
-# ──────────────────────────────────────────────────────────────────────────────
 
 
 def _build_mtlm_model(d_model: int = 32, n_heads: int = 4, n_layers: int = 2) -> MTLMModel:
@@ -248,7 +196,6 @@ def test_mtlm_model_forward_end_to_end(mtlm_batch):
     model = _build_mtlm_model()
     model.eval()
     out = model(mtlm_batch)
-    # Sanity: all heads produced output at every feature slot.
     assert set(out["cat"].keys()) == set(CATEGORICAL_FEATURES)
     assert set(out["pay"].keys()) == set(PAY_STATUS_FEATURES)
     assert set(out["num"].keys()) == set(NUMERICAL_FEATURES)
@@ -257,11 +204,10 @@ def test_mtlm_model_forward_end_to_end(mtlm_batch):
 def test_mtlm_model_encoder_state_dict_has_only_embedding_and_encoder():
     model = _build_mtlm_model()
     encoder_sd = model.encoder_state_dict()
-    # Every key must start with 'embedding.' or 'encoder.' — that's exactly
-    # the set TabularTransformer.load_pretrained_encoder consumes.
+    # every key must be `embedding.*` or `encoder.*` — exactly what
+    # TabularTransformer.load_pretrained_encoder consumes
     for key in encoder_sd:
         assert key.startswith("embedding.") or key.startswith("encoder."), key
-    # And every encoder / embedding parameter in the full model appears.
     full = model.state_dict()
     for key in full:
         if key.startswith("embedding.") or key.startswith("encoder."):
@@ -271,16 +217,12 @@ def test_mtlm_model_encoder_state_dict_has_only_embedding_and_encoder():
 
 
 def test_tabular_transformer_loads_mtlm_encoder_state_dict(tmp_path):
-    """Integration: pretrain an MTLMModel, save encoder_state_dict,
-    construct a fresh TabularTransformer, call load_pretrained_encoder
-    on the raw file. The embedding+encoder weights must transfer exactly;
-    the classification head must stay at fresh init."""
+    # Plan §8.5.5 contract e2e: pretrain MTLM → persist encoder_state_dict
+    # → load into fresh TabularTransformer. encoder transfers, head stays.
     torch.manual_seed(0)
     cat_vocab_sizes = {"SEX": 2, "EDUCATION": 4, "MARRIAGE": 3}
-    # Shared architecture — both models must agree on every layer shape.
     mtlm = _build_mtlm_model(d_model=32, n_heads=4, n_layers=2)
 
-    # Snapshot a couple of encoder weights before any state transfer.
     mtlm_qweight = mtlm.encoder.blocks[0].attention.W_Q.weight.detach().clone()
     mtlm_emb_cls = mtlm.embedding.cls_token.detach().clone()
 
@@ -288,22 +230,19 @@ def test_tabular_transformer_loads_mtlm_encoder_state_dict(tmp_path):
     path = tmp_path / "encoder_pretrained.pt"
     torch.save(encoder_sd, path)
 
-    torch.manual_seed(42)  # different seed → different random init
+    torch.manual_seed(42)
     tabular = TabularTransformer(
         d_model=32, n_heads=4, n_layers=2,
         cat_vocab_sizes=cat_vocab_sizes,
     )
-    # Classifier weights before the load — different from any MTLM weight.
     head_w_before = tabular.classifier[0].weight.detach().clone()
 
     tabular.load_pretrained_encoder(path, strict=False)
 
-    # Encoder/embedding should now match the MTLM snapshot.
     assert torch.allclose(
         tabular.encoder.blocks[0].attention.W_Q.weight, mtlm_qweight, atol=1e-6
     )
     assert torch.allclose(tabular.embedding.cls_token, mtlm_emb_cls, atol=1e-6)
-    # Classifier head should remain untouched.
     assert torch.allclose(tabular.classifier[0].weight, head_w_before, atol=1e-6)
 
 

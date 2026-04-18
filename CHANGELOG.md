@@ -34,7 +34,127 @@ Contributors (alphabetical by GitHub handle):
 
 ---
 
-## [Unreleased] — `feature/phase-8-evaluation-ensembling`
+## [Unreleased] — `feature/phase-11-12-14`
+
+Phase 11 (calibration), 11A (fairness, N10), 11B (uncertainty, N11), 12
+(significance), 14A (reproducibility), 14B (Model Card + Data Sheet,
+N12), plus Phase 8 post-review items. Section 4 of the plan is now
+backed by committed CSVs, figures, and a regeneration harness.
+
+### Added — Phase 11: post-hoc calibration (`src/calibration.py`, ~560 LOC)
+
+- `TemperatureScaling`, `PlattScaling`, `IsotonicCalibrator` + an
+  `IdentityCalibrator` baseline, all sharing `fit(y_val, p_val) →
+  transform(p_test) → p_test_cal`. Temperature: bounded Brent on
+  logit-NLL. Platt: L-BFGS-B on a 2-param logistic. Isotonic wraps
+  sklearn with `out_of_bounds="clip"`.
+- ECE (equal-width + equal-mass), MCE, Brier decomposition
+  (Murphy 1973: reliability − resolution + uncertainty), Brier skill.
+- CLI fits every calibrator on each run's val, scores on test, writes
+  `results/calibration/calibration_metrics.csv`,
+  `figures/calibration_reliability.png`,
+  `figures/calibration_ece_bar.png`.
+- Raw transformer ECE 0.26 → 0.011 ± 0.003 post-Platt (range 0.007–0.013
+  across the four runs; MTLM seed 0.007). AUC unchanged; matches the
+  RF's 0.010.
+- Tests — `tests/test_calibration.py`, 12 cases, 95% cov. Synthetic well-
+  and mis-calibrated fixtures, isotonic monotonicity, Brier-decomposition
+  identity, e2e against committed `seed_42` artefacts.
+
+### Added — Phase 11A: subgroup fairness audit (N10; `src/fairness.py`, ~500 LOC)
+
+- `SubgroupMetrics` + `audit_attribute()`: per-subgroup n, base rate,
+  selection rate, TPR, FPR, AUC, ECE, Brier.
+- Disparity table: demographic-parity Δ, equal-opportunity violation,
+  equalised-odds violation, AUC/ECE disparity. Reference subgroup is
+  the largest by n.
+- Subgroups with n < 50 → `underpowered=True` rather than silently dropped.
+- Plots: `figures/fairness_disparity.png` +
+  `figures/fairness_reliability_{sex,education,marriage}.png`.
+- Male vs Female demographic-parity Δ = +0.02. EDUCATION "Other" (n=61)
+  drops 0.19–0.31 AUC → flagged, not reported.
+- Tests — `tests/test_fairness.py`, 7 cases, 92% cov.
+
+### Added — Phase 11B: MC-dropout uncertainty (N11; `src/uncertainty.py`, ~470 LOC)
+
+- `enable_dropout()` flips only `nn.Dropout*` submodules to train mode;
+  LayerNorm γ/β stay fixed.
+- `mc_dropout_predict()` runs T stochastic passes with per-sample
+  re-seeding, returns (T, N) probabilities.
+- `uncertainty_from_samples()`: posterior mean/std, predictive entropy,
+  aleatoric entropy, mutual information (BALD).
+- `refuse_curve()`: accuracy + AUC on the retained subset as abstention
+  grows. Ranking signal ∈ {predictive_entropy, mutual_info, std}.
+- CLI writes `results/uncertainty/mc_dropout.npz` (per-row arrays +
+  raw (T, N) probabilities), `uncertainty_summary.json`,
+  `refuse_curve.csv`, `figures/uncertainty_refuse_curve.png`,
+  `figures/uncertainty_entropy_hist.png`.
+- Deferring top 50% most-uncertain: retained AUC 0.779 → 0.850.
+- Tests — `tests/test_uncertainty.py`, 7 cases, 95% cov.
+
+### Added — Phase 12: significance testing (`src/significance.py`, ~610 LOC)
+
+- `mcnemar_test()`: exact binomial on small discordant counts, chi-sq
+  with continuity correction otherwise.
+- `delong_auc_test()`: O(N log N) DeLong via Sun & Xu (2014) mid-rank
+  structural components. Returns Z, p, 95% CI on `AUC_a − AUC_b`.
+- `paired_bootstrap()`: joint resampling for any metric (AUC, AUC-PR,
+  F1, Brier, ECE, accuracy).
+- `bh_fdr()`: Benjamini-Hochberg q-values + rejection mask, per
+  (test, metric) family.
+- `min_n_for_auc_difference()`: Hanley-McNeil closed-form power.
+- Pairwise CLI writes `results/significance/pairwise_tests.csv`,
+  `power_analysis.csv`, `figures/significance_pvalue_heatmap.png`.
+- DeLong RF-vs-transformer AUC: p = 0.023 raw, q = 0.23 after BH over
+  15 pairs. 4,500-row test split has 80% power only for AUC gaps ≥ 0.02.
+- Tests — `tests/test_significance.py`, 14 cases, 69% cov on CLI + plotting.
+
+### Added — Phase 14A: reproducibility harness (`src/repro.py`, ~340 LOC)
+
+- Six-check regeneration report: artefact presence, transformer run
+  files, python/torch pins, git-tree status, RF-prediction bit-parity,
+  `evaluate.py` bit-parity.
+- `python src/repro.py` exits 0 when every derivative artefact matches
+  its committed copy at `rtol=1e-4, atol=1e-6`. CI gate.
+- `docs/REPRODUCIBILITY.md` classes each artefact as bit-stable,
+  approximately deterministic, or stochastic by design.
+- Tests — `tests/test_repro.py`, 8 cases, 72% cov.
+
+### Added — Phase 14B: Model Card + Data Sheet (N12)
+
+- `docs/MODEL_CARD.md`: intended use, out-of-scope, pre/post-Platt ECE
+  table, Phase 11A subgroup numbers, deploy-with-Platt recommendation,
+  artefact locations.
+- `docs/DATA_SHEET.md`: motivation, 23-feature composition, collection,
+  preprocessing, permitted vs prohibited uses, observed failure modes.
+
+### Added — Post-PR #12 review items
+
+- `src/rf_predictions.py` refits the tuned RF from committed
+  `rf_config.json`, persists per-row test probabilities in train.py's
+  NPZ layout. Bit-stable vs committed (max |Δp| = 0.0). Feeds
+  calibration / fairness / significance.
+- `src/evaluate.py`: `ensemble_run()` for arithmetic or
+  geometric-mean-of-logit ensembles; `load_rf_from_predictions()`
+  prefers the raw RF probability vector over the aggregate CSV so the
+  RF-tuned row can report ECE / Brier / kappa / specificity. New
+  `--rf-predictions` + `--ensemble-mode` flags.
+- `results/comparison_table.csv`: adds a `Transformer ensemble
+  (arithmetic, n=3)` row + RF-tuned row with every metric in
+  `REPORTED_METRICS`.
+- Tests — `tests/test_evaluate_ensemble.py` (7) + `tests/test_rf_predictions.py`
+  (5). Suite grows from 235 → 297 (+62).
+
+### Docs
+
+- `PROJECT_PLAN.md` — Phase 8, 11, 11A, 11B, 12, 14A, 14B status
+  markers flipped [TODO] → [DONE] with one-line results.
+- `README.md` — Section 4 evidence pack table links every Section 4
+  claim to its source artefact.
+
+---
+
+## `feature/phase-8-evaluation-ensembling`
 
 Working branch `feature/phase-8-evaluation-ensembling`. **Everything
 below is Phase 1-7 work only** (per user scoping) — Phase 8 evaluation,

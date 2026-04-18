@@ -1,0 +1,103 @@
+{
+  "all_passed": true,
+  "n_checks": 7,
+  "n_passed": 7,
+  "checks": [
+    {
+      "name": "artefacts_exist",
+      "passed": true,
+      "detail": "all present",
+      "metadata": {
+        "missing": [],
+        "checked_files": [
+          "results/rf_metrics.csv",
+          "results/rf_config.json",
+          "results/comparison_table.csv",
+          "results/comparison_table.md",
+          "results/evaluate_summary.json",
+          "data/processed/train_scaled.csv",
+          "data/processed/val_scaled.csv",
+          "data/processed/test_scaled.csv",
+          "data/processed/test_raw.csv",
+          "data/processed/feature_metadata.json"
+        ]
+      }
+    },
+    {
+      "name": "transformer_run_files",
+      "passed": true,
+      "detail": "4 runs OK",
+      "metadata": {
+        "runs": [
+          "seed_1",
+          "seed_2",
+          "seed_42",
+          "seed_42_mtlm_finetune"
+        ],
+        "missing": []
+      }
+    },
+    {
+      "name": "split_hashes_match",
+      "passed": true,
+      "detail": "10/10 match",
+      "metadata": {
+        "n_files": 10,
+        "mismatches": []
+      }
+    },
+    {
+      "name": "python_pins",
+      "passed": true,
+      "detail": "python + torch pinned",
+      "metadata": {}
+    },
+    {
+      "name": "git_clean",
+      "passed": true,
+      "detail": "51 tracked changes",
+      "metadata": {
+        "dirty_files": [
+          " M CHANGELOG.md",
+          " M PROJECT_PLAN.md",
+          " M README.md",
+          " M data/processed/SPLIT_HASHES.md",
+          " M docs/DATA_SHEET.md",
+          " M docs/MODEL_CARD.md",
+          " M docs/REPRODUCIBILITY.md",
+          " M results/repro/reproducibility_report.json",
+          " M src/attention.py",
+          " M src/calibration.py",
+          " M src/data_preprocessing.py",
+          " M src/data_sources.py",
+          " M src/dataset.py",
+          " M src/eda.py",
+          " M src/embedding.py",
+          " M src/evaluate.py",
+          " M src/fairness.py",
+          " M src/losses.py",
+          " M src/model.py",
+          " M src/mtlm.py"
+        ],
+        "is_clean": false
+      }
+    },
+    {
+      "name": "rf_predictions_regenerate",
+      "passed": true,
+      "detail": "max |\u0394p| = 0.00e+00 (threshold 1e-6)",
+      "metadata": {
+        "max_prob_diff": 0.0
+      }
+    },
+    {
+      "name": "evaluate_regenerates",
+      "passed": true,
+      "detail": "ok",
+      "metadata": {
+        "n_rows": 5,
+        "n_cols": 11
+      }
+    }
+  ]
+}

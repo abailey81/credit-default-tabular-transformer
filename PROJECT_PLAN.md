@@ -1154,7 +1154,7 @@ src/random_forest.py    — RF training, tuning, feature importance, SHAP analys
 
 ## 10. Phase 8: Evaluation & Metrics
 
-**Status: [TODO] TODO**
+**Status: [DONE] — `src/evaluate.py` + `src/visualise.py` + `src/rf_predictions.py`. Comparison table at `results/comparison_table.{csv,md}`, five figures in `figures/`. Ensemble row + full RF calibration metrics landed on `feature/phase-11-12-14`.**
 
 ### 10.1 Comprehensive Metrics Suite
 
@@ -1501,7 +1501,7 @@ src/counterfactuals.py  — Token-substitution counterfactuals + minimum-interve
 
 ## 13. Phase 11: Calibration Analysis
 
-**Status: [TODO] TODO**
+**Status: [DONE] — `src/calibration.py` + `tests/test_calibration.py`: temperature / Platt / isotonic + ECE (equal-width + equal-mass), MCE, Brier decomposition, Brier skill. Raw transformer ECE 0.26 → 0.011 ± 0.003 post-Platt (matches RF's 0.010); AUC unchanged. Artefacts in `results/calibration/` + `figures/calibration_{reliability,ece_bar}.png`.**
 
 ### 13.1 Why Calibration Matters
 
@@ -1565,7 +1565,7 @@ src/calibration.py      — ECE, reliability diagrams, temperature scaling, Brie
 
 ## 13.5 Phase 11A: Fairness & Subgroup Robustness (NOVEL — N10)
 
-**Status: [TODO] TODO**
+**Status: [DONE] — `src/fairness.py` + `tests/test_fairness.py` audit SEX / EDUCATION / MARRIAGE on demographic parity, equal opportunity, equalised odds, subgroup AUC/ECE. Male/Female AUC gap = 0.011. EDUCATION "Other" (n=61) flagged underpowered (AUC drop 0.19–0.31), not reported. Artefacts in `results/fairness/{subgroup_metrics,disparity_metrics}.csv` + `figures/fairness_disparity.png` + `figures/fairness_reliability_{sex,education,marriage}.png`.**
 
 Credit scoring is a regulated use-case. A model with high aggregate AUC but disparate performance across protected attributes is legally and ethically problematic. Fairness analysis is also one of the clearest places to demonstrate the "independent thought" criterion.
 
@@ -1608,7 +1608,7 @@ src/fairness.py         — Subgroup metrics, gap reports, mitigation variants
 
 ## 13.6 Phase 11B: Uncertainty Quantification (NOVEL — N11)
 
-**Status: [TODO] TODO**
+**Status: [DONE] — `src/uncertainty.py` + `tests/test_uncertainty.py`: MC-dropout (T=50) + predictive / aleatoric entropy + mutual info (BALD) + refuse-to-predict at 5% steps across three uncertainty signals. Predictive entropy ↔ misclassification (Spearman 0.175); deferring top 50% most-uncertain lifts retained AUC 0.779 → 0.850. Artefacts in `results/uncertainty/{mc_dropout.npz,refuse_curve.csv}` + `figures/uncertainty_{refuse_curve,entropy_hist}.png`.**
 
 A calibrated probability is not the same as a *reliable* probability on a specific input. A model may be 90%-confident on an easy example but only 55%-confident on a hard one — this is **epistemic uncertainty** and is critical in regulated domains where "refuse to predict and escalate to human review" is a valid decision.
 
@@ -1647,7 +1647,7 @@ src/uncertainty.py      — MC-dropout inference, predictive entropy, selective 
 
 ## 14. Phase 12: Statistical Significance Testing
 
-**Status: [TODO] TODO**
+**Status: [DONE] — `src/significance.py` + `tests/test_significance.py`: McNemar (exact + chi-sq), DeLong AUC-diff (Sun & Xu 2014), paired bootstrap on arbitrary metrics, BH-FDR correction, Hanley-McNeil power. DeLong RF-vs-transformer AUC p = 0.023 raw, q = 0.23 after BH over 15 pairs → no significant gap claimed. 4,500-row test split has 80% power only for AUC gaps ≥ 0.02. Artefacts in `results/significance/{pairwise_tests,power_analysis}.csv` + `figures/significance_pvalue_heatmap.png`.**
 
 ### 14.1 Multi-Run Analysis
 
@@ -1878,7 +1878,7 @@ Marking criteria include "writing quality" and "presentation" (25% combined). Cl
 
 ## 16.5 Phase 14A: Reproducibility Guarantees
 
-**Status: [TODO] TODO**
+**Status: [DONE] — `src/repro.py` + `tests/test_repro.py` + `docs/REPRODUCIBILITY.md` + `data/processed/SPLIT_HASHES.md`. Seven checks: artefact presence, transformer-run-file integrity, split-hash SHA-256 (§16.5.3), python/torch pins, git-clean, RF-prediction bit-parity (max |Δp| = 0), `evaluate.py` bit-parity. `python src/repro.py` exits 0 when everything matches. §16.5.4 Dockerfile deferred.**
 
 "Code runs on my machine" is not a guarantee. We commit to stronger guarantees that any marker can verify in a clean environment.
 
@@ -1943,7 +1943,7 @@ python -m scripts.reproduce_all    # runs every phase end-to-end
 
 ## 16.6 Phase 14B: Model Card & Data Sheet (NOVEL — N12)
 
-**Status: [TODO] TODO**
+**Status: [DONE] — `docs/MODEL_CARD.md` + `docs/DATA_SHEET.md` cover intended use, out-of-scope uses, performance, Phase 11A fairness numbers, the deploy-with-Platt calibration caveat, and the 2005-Taiwan vintage limitation.**
 
 Following Mitchell et al. (2019) and Gebru et al. (2021), we produce two formal responsible-AI artefacts for the final model:
 

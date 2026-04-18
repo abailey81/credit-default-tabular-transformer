@@ -1,4 +1,4 @@
-"""Tests for src/tokenizer.py — hybrid PAY encoding, vectorisation, MTLM collator."""
+"""tokenizer.py — hybrid PAY encoding, vectorisation, MTLM collator."""
 
 from __future__ import annotations
 
@@ -27,11 +27,6 @@ from tokenizer import (  # noqa: E402
 )
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-# encode_pay_value
-# ──────────────────────────────────────────────────────────────────────────────
-
-
 @pytest.mark.parametrize(
     "pay,expected",
     [
@@ -57,18 +52,12 @@ def test_max_pay_delay_constant():
     assert MAX_PAY_DELAY == 8
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Vocab builders
-# ──────────────────────────────────────────────────────────────────────────────
-
-
 def test_build_categorical_vocab_structure(metadata):
     vocab = build_categorical_vocab(metadata)
     assert set(vocab.keys()) == set(CATEGORICAL_FEATURES)
     for feat, mapping in vocab.items():
         assert all(isinstance(k, int) for k in mapping.keys())
         assert all(isinstance(v, int) for v in mapping.values())
-        # Local indices are a contiguous range starting at 0.
         assert sorted(mapping.values()) == list(range(len(mapping)))
 
 
@@ -78,14 +67,8 @@ def test_build_numerical_vocab_shape():
     assert sorted(vocab.values()) == list(range(len(NUMERICAL_FEATURES)))
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Vectorised vs. per-row equivalence
-# ──────────────────────────────────────────────────────────────────────────────
-
-
 def test_tokenize_row_vs_vectorised(train_df_small, cat_vocab):
     ds = CreditDefaultDataset(train_df_small, cat_vocab, verbose=False)
-    # Check first 10 rows.
     for i in range(10):
         fast = ds[i]
         slow = tokenize_row(train_df_small.iloc[i], cat_vocab)
@@ -112,20 +95,14 @@ def test_dataset_item_shapes(small_dataset):
 
 
 def test_dataset_getitem_is_o1_shaped(small_dataset):
-    """Ensure __getitem__ does not re-iterate the frame (shapes should be fast)."""
+    # __getitem__ must not re-iterate the frame
     import time
 
     t0 = time.perf_counter()
     for i in range(len(small_dataset)):
         _ = small_dataset[i]
     elapsed = time.perf_counter() - t0
-    # 128 rows should be well under 100 ms even on slow CI.
     assert elapsed < 0.5, f"__getitem__ too slow: {elapsed*1000:.1f} ms for 128 rows"
-
-
-# ──────────────────────────────────────────────────────────────────────────────
-# Validation
-# ──────────────────────────────────────────────────────────────────────────────
 
 
 def test_tokenize_dataframe_rejects_unseen_categorical(train_df_small, cat_vocab):
@@ -140,11 +117,6 @@ def test_tokenize_dataframe_rejects_out_of_range_pay(train_df_small, cat_vocab):
     bad.loc[bad.index[0], "PAY_0"] = 99
     with pytest.raises(PAYValueError):
         tokenize_dataframe(bad, cat_vocab)
-
-
-# ──────────────────────────────────────────────────────────────────────────────
-# MTLMCollator
-# ──────────────────────────────────────────────────────────────────────────────
 
 
 def test_mtlm_collator_output_shape(small_dataset):
@@ -173,7 +145,6 @@ def test_mtlm_collator_replace_mode_consistency(small_dataset):
     out = collator(batch)
     # replace_mode=-1 iff mask_positions=False
     assert ((out["replace_mode"] == -1) == (~out["mask_positions"])).all()
-    # all modes at masked positions are in {0, 1, 2}
     selected_modes = out["replace_mode"][out["mask_positions"]]
     assert (selected_modes >= 0).all() and (selected_modes <= 2).all()
 
@@ -191,17 +162,10 @@ def test_mtlm_collator_rejects_bad_probs():
     with pytest.raises(ValueError):
         MTLMCollator(mask_prob=1.0)
     with pytest.raises(ValueError):
-        MTLMCollator(replace_with_mask=0.7, replace_with_random=0.5)  # sum > 1
-
-
-# ──────────────────────────────────────────────────────────────────────────────
-# pay_raw — raw PAY values shifted into [0, 10], for MTLM / N5 multi-task heads
-# ──────────────────────────────────────────────────────────────────────────────
+        MTLMCollator(replace_with_mask=0.7, replace_with_random=0.5)
 
 
 def test_pay_raw_present_and_shifted_into_zero_ten(train_df_small, cat_vocab):
-    """pay_raw must be present in the dataset item dict, shape (6,), int64,
-    with values in [0, 10] corresponding to raw PAY values in [-2, 8]."""
     ds = CreditDefaultDataset(train_df_small, cat_vocab, verbose=False)
     item = ds[0]
     assert "pay_raw" in item, "pay_raw missing from __getitem__ output"
@@ -212,23 +176,20 @@ def test_pay_raw_present_and_shifted_into_zero_ten(train_df_small, cat_vocab):
 
 
 def test_pay_raw_matches_raw_dataframe_values(train_df_small, cat_vocab):
-    """pay_raw_shifted - 2 should equal the original PAY values in the frame."""
     ds = CreditDefaultDataset(train_df_small, cat_vocab, verbose=False)
     expected = train_df_small[PAY_STATUS_FEATURES].to_numpy(dtype=np.int64)
-    # ds.tensors is an escape hatch exposing the full (N, 6) tensor.
-    observed = ds.tensors["pay_raw"].numpy() - 2  # undo the +2 shift
+    observed = ds.tensors["pay_raw"].numpy() - 2  # undo +2 shift
     assert np.array_equal(observed, expected)
 
 
 def test_pay_raw_consistent_with_hybrid_state_severity(train_df_small, cat_vocab):
-    """A row's pay_raw must be recoverable from its (state_id, severity)
-    pair — this is the invariant the N5 aux head relies on."""
+    # pay_raw must be recoverable from (state_id, severity) — the N5 aux
+    # head's supervision target relies on this invariant
     ds = CreditDefaultDataset(train_df_small, cat_vocab, verbose=False)
-    state = ds.tensors["pay_state_ids"]            # (N, 6) int64
-    sev = ds.tensors["pay_severities"]             # (N, 6) float32
-    raw_shifted = ds.tensors["pay_raw"]            # (N, 6) int64 in [0, 10]
-    raw = raw_shifted - 2                          # original [-2, 8]
-    # Reconstruct from (state, severity).
+    state = ds.tensors["pay_state_ids"]
+    sev = ds.tensors["pay_severities"]
+    raw_shifted = ds.tensors["pay_raw"]
+    raw = raw_shifted - 2
     reconstructed = torch.zeros_like(raw)
     reconstructed[state == PAY_STATE_NO_BILL] = -2
     reconstructed[state == PAY_STATE_PAID_FULL] = -1
@@ -242,7 +203,6 @@ def test_pay_raw_consistent_with_hybrid_state_severity(train_df_small, cat_vocab
 
 
 def test_pay_raw_flows_through_default_collate(small_dataset):
-    """The DataLoader collate function must stack pay_raw along dim 0."""
     from dataset import default_collate
 
     batch = default_collate([small_dataset[i] for i in range(8)])
@@ -252,7 +212,6 @@ def test_pay_raw_flows_through_default_collate(small_dataset):
 
 
 def test_pay_raw_flows_through_mtlm_collator(small_dataset):
-    """The MTLM collator must carry pay_raw through alongside mask_positions."""
     out = MTLMCollator(mask_prob=0.15, seed=7)([small_dataset[i] for i in range(8)])
     assert "pay_raw" in out
     assert out["pay_raw"].shape == (8, 6)

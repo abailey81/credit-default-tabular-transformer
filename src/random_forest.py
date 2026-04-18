@@ -1,37 +1,9 @@
-"""
-random_forest.py — Hyperparameter-Tuned Random Forest Benchmark
-for the UCI Credit Card Default dataset.
+"""Tuned Random Forest benchmark.
 
-This module implements the complete Random Forest pipeline that serves as the
-baseline benchmark against the from-scratch Transformer model.
-
-Pipeline steps:
-  1. Data ingestion via shared preprocessing (data_preprocessing.py), which
-     in turn delegates to the resilient multi-source loader in
-     :mod:`data_sources` (UCI API → local manual ``.xls`` fallback).
-  2. Feature engineering (22+ derived features)
-  3. Stratified 70/15/15 split with class-balance preservation
-  4. Baseline Random Forest (default hyperparameters)
-  5. Hyperparameter tuning via RandomizedSearchCV (60 iter × 5-fold CV)
-  6. Full evaluation (accuracy, precision, recall, F1, AUC-ROC, average precision)
-  7. 5-fold stratified cross-validation for robust performance estimates
-  8. Dual feature importance analysis (Gini MDI + permutation-based)
-  9. Threshold optimisation (tuned on validation, evaluated on test)
-  10. Publication-quality figures (ROC/PR, confusion matrix, tuning, importance)
-  11. Results export (CSV + JSON)
-
-Design:
-  - Reuses data_preprocessing.py for loading, cleaning, and engineering to
-    guarantee identical transformations across RF and Transformer pipelines.
-  - Inherits the API → local fallback semantics for free, so the benchmark
-    runs end-to-end with or without network access.
-  - Evaluates on AUC-ROC (primary) and F1 (secondary) as class-imbalance-robust
-    metrics; accuracy reported but not used for model selection.
-  - Threshold optimised on the validation set exclusively; test-set metrics
-    reported at both default (0.50) and optimised thresholds.
-
-Reference: Yeh, I.C. & Lien, C.H. (2009). Expert Systems with Applications, 36(2), 2473-2480.
-"""
+Shares preprocessing with the transformer (identical features), then runs a
+200-iter RandomizedSearchCV on a 7-param grid, 5-fold CV on the winner, and
+writes metrics + feature importance + figures under results/ and figures/.
+Mirrors train.py's artefact layout."""
 
 import json
 import time
@@ -77,13 +49,8 @@ from data_preprocessing import (
 warnings.filterwarnings("ignore", category=FutureWarning)
 
 
-# ──────────────────────────────────────────────────────────────────────────────
 # Constants
-# ──────────────────────────────────────────────────────────────────────────────
 
-# Widened hyperparameter grid per Plan §9.3 — 200-iter randomised search
-# (up from the earlier 60-iter proof-of-concept) to push the RF baseline to
-# its achievable ceiling before the head-to-head comparison.
 TUNING_GRID: Dict[str, list] = {
     "n_estimators":      [100, 200, 300, 500, 1000],
     "max_depth":         [5, 10, 15, 20, 30, None],
@@ -94,18 +61,18 @@ TUNING_GRID: Dict[str, list] = {
     "criterion":         ["gini", "entropy"],
 }
 
-# Colour palette — consistent with eda.py aesthetics
+# palette matches eda.py
 PALETTE = {
-    "primary": "#534AB7",       # Deep purple — model curves, primary bars
-    "secondary": "#1D9E75",     # Teal — precision, no-default
-    "accent": "#D85A30",        # Burnt orange — recall, default
-    "neutral": "#6B7280",       # Slate — reference lines, annotations
-    "info": "#378ADD",          # Blue — supplementary series
+    "primary": "#534AB7",
+    "secondary": "#1D9E75",
+    "accent": "#D85A30",
+    "neutral": "#6B7280",
+    "info": "#378ADD",
 }
 
 
 def set_rf_style() -> None:
-    """Configure matplotlib for publication-quality figures matching eda.py."""
+    """Matplotlib rc tweaks for 300 DPI serif figures."""
     plt.rcParams.update({
         "figure.dpi": 150,
         "savefig.dpi": 300,
@@ -126,20 +93,14 @@ def set_rf_style() -> None:
     })
 
 
-# ──────────────────────────────────────────────────────────────────────────────
 # Training
-# ──────────────────────────────────────────────────────────────────────────────
 
 def train_baseline(
     X_train: pd.DataFrame,
     y_train: pd.Series,
     seed: int = RANDOM_SEED,
 ) -> Tuple[RandomForestClassifier, float]:
-    """
-    Train a Random Forest with default hyperparameters (100 estimators).
-
-    Returns the fitted model and wall-clock training time in seconds.
-    """
+    """100-tree RF at sklearn defaults; returns ``(model, seconds)``."""
     rf = RandomForestClassifier(n_estimators=100, random_state=seed, n_jobs=-1)
     t0 = time.time()
     rf.fit(X_train, y_train)
@@ -156,13 +117,8 @@ def tune_hyperparameters(
     n_cv_folds: int = 5,
     seed: int = RANDOM_SEED,
 ) -> RandomizedSearchCV:
-    """
-    Tune RF hyperparameters via RandomizedSearchCV.
-
-    Uses stratified k-fold CV with AUC-ROC as the scoring metric.
-    Returns the full RandomizedSearchCV object (includes best_estimator_,
-    best_params_, best_score_, and cv_results_).
-    """
+    """RandomizedSearchCV on stratified folds, scoring AUC-ROC. Returns the
+    full searcher (caller wants ``best_estimator_`` + ``cv_results_``)."""
     if param_grid is None:
         param_grid = TUNING_GRID
 
@@ -197,9 +153,7 @@ def tune_hyperparameters(
     return searcher
 
 
-# ──────────────────────────────────────────────────────────────────────────────
 # Evaluation
-# ──────────────────────────────────────────────────────────────────────────────
 
 def evaluate_model(
     model: RandomForestClassifier,
@@ -208,13 +162,10 @@ def evaluate_model(
     split_name: str = "test",
     threshold: float = 0.5,
 ) -> Tuple[Dict[str, Any], np.ndarray, np.ndarray]:
-    """
-    Compute classification metrics on a given split.
+    """Score a split at the given threshold.
 
-    Returns:
-        metrics: dict with accuracy, precision, recall, F1, AUC-ROC, avg precision
-        y_pred: binary predictions at the given threshold
-        y_prob: predicted probabilities for the positive class
+    Returns ``(metrics, y_pred, y_prob)``; metrics cover acc/prec/rec/F1/
+    AUC-ROC/AP + inference time.
     """
     t0 = time.time()
     y_prob = model.predict_proba(X)[:, 1]
@@ -247,7 +198,7 @@ def get_classification_report(
     y_true: pd.Series,
     y_pred: np.ndarray,
 ) -> str:
-    """Return a formatted classification report string."""
+    """Pretty-printed sklearn classification report."""
     return classification_report(
         y_true, y_pred, target_names=["No Default", "Default"]
     )
@@ -260,11 +211,7 @@ def cross_validate_model(
     n_folds: int = 5,
     seed: int = RANDOM_SEED,
 ) -> pd.DataFrame:
-    """
-    Run stratified k-fold cross-validation and return a summary DataFrame.
-
-    Metrics computed: accuracy, precision, recall, f1, roc_auc.
-    """
+    """k-fold stratified CV; mean/std/min/max for acc/prec/rec/F1/AUC-ROC."""
     cv = StratifiedKFold(n_splits=n_folds, shuffle=True, random_state=seed)
     scoring_metrics = ["accuracy", "precision", "recall", "f1", "roc_auc"]
     rows = []
@@ -293,26 +240,15 @@ def compute_feature_importance(
     n_repeats: int = 10,
     top_n: int = 20,
 ) -> pd.DataFrame:
-    """
-    Compute dual feature importance: Gini (MDI) and permutation-based.
-
-    Gini importance measures the total decrease in node impurity (weighted by
-    the probability of reaching that node) across all trees. Permutation
-    importance is model-agnostic and measures the decrease in AUC-ROC when
-    each feature is randomly shuffled.
-
-    Returns a DataFrame with columns: feature, gini_importance,
-    perm_importance, perm_std — sorted by permutation importance.
-    """
+    """Gini (MDI) + permutation importance, sorted by permutation.
+    Columns: feature, gini_importance, perm_importance, perm_std."""
     features = X_test.columns.tolist()
 
-    # Gini (MDI) importance
     gini = pd.DataFrame({
         "feature": features,
         "gini_importance": model.feature_importances_,
     }).sort_values("gini_importance", ascending=False).reset_index(drop=True)
 
-    # Permutation importance
     print(f"[RF] Computing permutation importance ({n_repeats} repeats)...")
     perm = permutation_importance(
         model, X_test, y_test,
@@ -325,7 +261,6 @@ def compute_feature_importance(
         "perm_std": perm.importances_std,
     })
 
-    # Merge and sort by permutation importance
     importance = gini.merge(perm_df, on="feature")
     importance = importance.sort_values(
         "perm_importance", ascending=False
@@ -346,12 +281,8 @@ def optimize_threshold(
     y_val: pd.Series,
     y_val_prob: np.ndarray,
 ) -> Tuple[float, pd.DataFrame]:
-    """
-    Find the classification threshold that maximises F1 on the validation set.
-
-    Sweeps thresholds from 0.10 to 0.90 in steps of 0.01.
-    Returns the optimal threshold and a DataFrame of threshold vs metrics.
-    """
+    """Sweep τ ∈ [0.10, 0.90] in 0.01 steps, pick argmax val-F1.
+    Returns (best_threshold, per-τ metric table)."""
     thresholds = np.arange(0.10, 0.90, 0.01)
     rows = []
     for t in thresholds:
@@ -375,23 +306,16 @@ def optimize_threshold(
     return best_t, df
 
 
-# ──────────────────────────────────────────────────────────────────────────────
 # Visualisation
-# ──────────────────────────────────────────────────────────────────────────────
 
 def plot_roc_pr_curves(
     y_test: pd.Series,
     y_prob: np.ndarray,
     save_dir: Optional[str] = None,
 ) -> plt.Figure:
-    """
-    ROC and Precision-Recall curves side by side.
-
-    Returns the matplotlib Figure. Saves to save_dir if provided.
-    """
+    """ROC + PR curves, side by side."""
     fig, axes = plt.subplots(1, 2, figsize=(13, 5))
 
-    # ROC curve
     fpr, tpr, _ = roc_curve(y_test, y_prob)
     auc_val = roc_auc_score(y_test, y_prob)
     axes[0].plot(fpr, tpr, lw=2.5, color=PALETTE["primary"],
@@ -404,7 +328,6 @@ def plot_roc_pr_curves(
     axes[0].legend(loc="lower right")
     axes[0].grid(True, alpha=0.15)
 
-    # Precision-Recall curve
     prec, rec, _ = precision_recall_curve(y_test, y_prob)
     ap = average_precision_score(y_test, y_prob)
     baseline = y_test.mean()
@@ -433,11 +356,7 @@ def plot_confusion_matrix(
     threshold: float,
     save_dir: Optional[str] = None,
 ) -> plt.Figure:
-    """
-    Confusion matrix heatmap at the given threshold.
-
-    Includes both raw counts and percentages. Returns the Figure.
-    """
+    """Confusion-matrix heatmap at τ, with counts and % overlaid."""
     y_pred = (y_prob >= threshold).astype(int)
     cm = confusion_matrix(y_test, y_pred)
 
@@ -456,7 +375,6 @@ def plot_confusion_matrix(
         fontsize=12,
     )
 
-    # Add percentage annotations below counts
     total = cm.sum()
     for i in range(2):
         for j in range(2):
@@ -479,10 +397,9 @@ def plot_feature_importance(
     top_n: int = 20,
     save_dir: Optional[str] = None,
 ) -> plt.Figure:
-    """Dual horizontal bar chart: Gini vs Permutation importance."""
+    """Gini vs permutation importance — side-by-side horizontal bars."""
     fig, axes = plt.subplots(1, 2, figsize=(16, 8))
 
-    # Gini importance (left panel)
     top_gini = importance_df.nlargest(top_n, "gini_importance")
     y_pos = range(len(top_gini))
     axes[0].barh(
@@ -496,7 +413,6 @@ def plot_feature_importance(
     axes[0].set_title("Gini Importance (built-in)", fontweight="bold")
     axes[0].grid(True, axis="x", alpha=0.15)
 
-    # Permutation importance (right panel)
     top_perm = importance_df.nlargest(top_n, "perm_importance")
     y_pos = range(len(top_perm))
     axes[1].barh(
@@ -528,7 +444,7 @@ def plot_threshold_analysis(
     best_threshold: float,
     save_dir: Optional[str] = None,
 ) -> plt.Figure:
-    """Plot precision, recall, F1 vs classification threshold."""
+    """P / R / F1 vs classification threshold, with optimal + default τ marked."""
     fig, ax = plt.subplots(figsize=(10, 5))
 
     ax.plot(threshold_df["threshold"], threshold_df["precision"],
@@ -562,19 +478,12 @@ def plot_tuning_analysis(
     searcher: RandomizedSearchCV,
     save_dir: Optional[str] = None,
 ) -> plt.Figure:
-    """
-    4-panel analysis of hyperparameter tuning results.
-
-    Panels:
-      1. n_estimators vs AUC-ROC (by max_depth)
-      2. Effect of max_depth on mean CV AUC-ROC
-      3. Effect of class_weight on mean CV AUC-ROC
-      4. Train vs CV AUC for top 20 configurations (overfitting check)
-    """
+    """Four-panel tuning diagnostics: n_estimators × max_depth, marginals on
+    max_depth and class_weight, and a train-vs-CV AUC overfitting check on
+    the top-20 configs."""
     results = pd.DataFrame(searcher.cv_results_)
     fig, axes = plt.subplots(2, 2, figsize=(14, 10))
 
-    # Panel 1: n_estimators × max_depth
     for depth in [5, 10, 15]:
         mask = results["param_max_depth"] == depth
         if mask.sum() == 0:
@@ -590,7 +499,6 @@ def plot_tuning_analysis(
     axes[0, 0].legend(fontsize=8)
     axes[0, 0].grid(True, alpha=0.15)
 
-    # Panel 2: max_depth effect
     results["depth_str"] = results["param_max_depth"].apply(
         lambda d: "None" if d is None else str(int(d))
     )
@@ -607,7 +515,6 @@ def plot_tuning_analysis(
     margin = max((hi - lo) * 0.3, 0.002)
     axes[0, 1].set_ylim(lo - margin, hi + margin)
 
-    # Panel 3: class_weight effect
     results["cw_str"] = results["param_class_weight"].apply(
         lambda w: "None" if w is None else str(w)
     )
@@ -627,7 +534,6 @@ def plot_tuning_analysis(
     margin = max((hi - lo) * 0.3, 0.002)
     axes[1, 0].set_ylim(lo - margin, hi + margin)
 
-    # Panel 4: Train vs CV AUC — overfitting check
     top = results.nlargest(20, "mean_test_score")
     x = np.arange(len(top))
     axes[1, 1].bar(
@@ -662,9 +568,7 @@ def plot_tuning_analysis(
     return fig
 
 
-# ──────────────────────────────────────────────────────────────────────────────
 # Results export
-# ──────────────────────────────────────────────────────────────────────────────
 
 def export_results(
     baseline_metrics: Dict,
@@ -675,22 +579,17 @@ def export_results(
     best_threshold: float,
     output_dir: str = "results",
 ) -> None:
-    """Save all results to CSV and JSON files."""
+    """Write metrics, CV summary, importance, and config under ``output_dir``."""
     out = Path(output_dir)
     out.mkdir(parents=True, exist_ok=True)
 
-    # Metrics comparison (baseline vs tuned)
     pd.DataFrame([baseline_metrics, tuned_metrics]).to_csv(
         out / "rf_metrics.csv", index=False,
     )
 
-    # Cross-validation results
     cv_df.to_csv(out / "rf_cross_validation.csv", index=False)
-
-    # Feature importance
     importance_df.to_csv(out / "rf_feature_importance.csv", index=False)
 
-    # Configuration and summary
     config = {
         "best_params": {str(k): str(v) for k, v in best_params.items()},
         "best_threshold": round(best_threshold, 2),
@@ -708,9 +607,7 @@ def export_results(
     print(f"         rf_feature_importance.csv, rf_config.json")
 
 
-# ──────────────────────────────────────────────────────────────────────────────
 # Master pipeline
-# ──────────────────────────────────────────────────────────────────────────────
 
 def run_rf_benchmark(
     data_path: Optional[str] = None,
@@ -723,45 +620,17 @@ def run_rf_benchmark(
     mode: str = "auto",
     allow_fallback: bool = True,
 ) -> Dict[str, Any]:
-    """
-    End-to-end Random Forest benchmark pipeline.
-
-    Steps:
-      1. Load and preprocess data via shared pipeline
-      2. Train baseline RF (default hyperparameters)
-      3. Tune hyperparameters (RandomizedSearchCV)
-      4. Evaluate on validation and test sets
-      5. Cross-validation for stability assessment
-      6. Feature importance analysis (Gini + permutation)
-      7. Threshold optimisation on validation set
-      8. Generate publication-quality figures
-      9. Export all results
-
-    Args:
-        data_path: Path to local .xls/.xlsx file. When set, bypasses the
-            chained loader and reads only the local file.
-        output_dir: Directory for CSV/JSON result files.
-        figure_dir: Directory for PNG figure files.
-        n_iter: Number of random parameter combinations to try.
-        n_cv_folds: Number of cross-validation folds.
-        seed: Random seed for reproducibility.
-        mode: Data source mode (``"auto"``/``"api"``/``"local"``).
-            ``"auto"`` enables UCI API → local fallback ingestion.
-        allow_fallback: If False, disables fallback in ``"auto"`` mode.
-
-    Returns:
-        Dict containing all results, metrics, models, and file paths.
-    """
+    """Full RF benchmark: preprocess → baseline → tune → eval → CV →
+    importance → threshold sweep → figures + CSV/JSON artefacts."""
     set_rf_style()
 
     Path(output_dir).mkdir(parents=True, exist_ok=True)
     Path(figure_dir).mkdir(parents=True, exist_ok=True)
 
     print("=" * 65)
-    print("  RANDOM FOREST BENCHMARK — CREDIT CARD DEFAULT PREDICTION")
+    print("  RANDOM FOREST BENCHMARK - CREDIT CARD DEFAULT PREDICTION")
     print("=" * 65)
 
-    # ── Step 1: Data pipeline (shared with Transformer) ──────────────────
     print("\n-- Step 1: Data Pipeline --")
     df = load_raw_data(data_path, mode=mode, allow_fallback=allow_fallback)
     df = normalise_schema(df)
@@ -782,7 +651,6 @@ def run_rf_benchmark(
     print(f"[RF] Features: {X_train.shape[1]} ({n_engineered} engineered)")
     print(f"[RF] Train: {len(X_train):,} | Val: {len(X_val):,} | Test: {len(X_test):,}")
 
-    # ── Step 2: Baseline ─────────────────────────────────────────────────
     print("\n-- Step 2: Baseline Random Forest --")
     baseline_model, baseline_time = train_baseline(X_train, y_train, seed)
     baseline_metrics, _, _ = evaluate_model(
@@ -791,14 +659,12 @@ def run_rf_benchmark(
     baseline_metrics["model"] = "RF_baseline"
     baseline_metrics["train_time_s"] = round(baseline_time, 2)
 
-    # ── Step 3: Hyperparameter tuning ────────────────────────────────────
     print("\n-- Step 3: Hyperparameter Tuning --")
     searcher = tune_hyperparameters(
         X_train, y_train, n_iter=n_iter, n_cv_folds=n_cv_folds, seed=seed,
     )
     best_model = searcher.best_estimator_
 
-    # ── Step 4: Evaluate tuned model ─────────────────────────────────────
     print("\n-- Step 4: Tuned Model Evaluation --")
     _, _, y_val_prob = evaluate_model(best_model, X_val, y_val, "validation")
     test_metrics, y_test_pred, y_test_prob = evaluate_model(
@@ -806,24 +672,19 @@ def run_rf_benchmark(
     )
     test_metrics["model"] = "RF_tuned"
 
-    # ── Step 5: Cross-validation ─────────────────────────────────────────
     print("\n-- Step 5: Cross-Validation --")
     cv_df = cross_validate_model(best_model, X_train, y_train, n_cv_folds, seed)
 
-    # ── Step 6: Feature importance ───────────────────────────────────────
     print("\n-- Step 6: Feature Importance --")
     importance_df = compute_feature_importance(best_model, X_test, y_test)
 
-    # ── Step 7: Threshold optimisation ───────────────────────────────────
     print("\n-- Step 7: Threshold Optimisation --")
     best_threshold, threshold_df = optimize_threshold(y_val, y_val_prob)
 
-    # Report test F1 at optimal threshold
     test_pred_opt = (y_test_prob >= best_threshold).astype(int)
     test_f1_opt = f1_score(y_test, test_pred_opt, zero_division=0)
     print(f"      Test F1 at optimal:  {test_f1_opt:.4f}")
 
-    # ── Step 8: Figures ──────────────────────────────────────────────────
     print("\n-- Step 8: Generating Figures --")
     fig1 = plot_roc_pr_curves(y_test, y_test_prob, figure_dir)
     plt.close(fig1)
@@ -836,14 +697,12 @@ def run_rf_benchmark(
     fig5 = plot_tuning_analysis(searcher, figure_dir)
     plt.close(fig5)
 
-    # ── Step 9: Export ───────────────────────────────────────────────────
     print("\n-- Step 9: Exporting Results --")
     export_results(
         baseline_metrics, test_metrics, cv_df, importance_df,
         searcher.best_params_, best_threshold, output_dir,
     )
 
-    # ── Summary ──────────────────────────────────────────────────────────
     print("\n" + "=" * 65)
     print("  BENCHMARK COMPLETE")
     print("=" * 65)
@@ -865,10 +724,6 @@ def run_rf_benchmark(
         "best_model": best_model,
     }
 
-
-# ──────────────────────────────────────────────────────────────────────────────
-# CLI entry point
-# ──────────────────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
     run_rf_benchmark()

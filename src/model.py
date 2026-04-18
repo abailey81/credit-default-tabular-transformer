@@ -1,43 +1,13 @@
-"""
-model.py — TabularTransformer: top-level end-to-end model.
-
-Wires the whole stack in one place:
-
-    batch  ─▶  FeatureEmbedding      ─▶  (B, 24, d)
-           ─▶  TransformerEncoder    ─▶  (B, 24, d) + per-layer attn
-           ─▶  pool (CLS | mean | max)  ─▶  (B, d)
-           ─▶  LayerNorm + 2-layer MLP head  ─▶  (B,) logit
-
-Optional heads / returns:
-    ∘ ``aux_pay0=True``  →  parallel 11-class head reading the PAY_0 token
-                            after it has been forced-masked. This is
-                            Plan §8.6 / Novelty N5 (multi-task auxiliary
-                            PAY-forecast). Target supplied by tokenizer's
-                            ``pay_raw`` (shifted into [0, 10]).
-    ∘ ``return_attn``    →  include per-layer attention weights in the
-                            forward output (for Phase 10 attention rollout).
-
-Architectural switches that cover the relevant ablations:
-    ∘ ``d_model``, ``n_heads``, ``n_layers``, ``d_ff``  →  A2, A3, A4
-    ∘ ``pool ∈ {cls, mean, max}``                        →  A5
-    ∘ ``use_temporal_pos``                               →  A7
-    ∘ ``temporal_decay_mode ∈ {off, scalar, per_head}``  →  A22 / Novelty N3
-    ∘ independently-ablatable attn/ffn/residual dropout  →  A12
-    ∘ ``use_mask_token``                                 →  enables MTLM
-                                                            pretraining (N4)
-    ∘ ``aux_pay0``                                       →  N5 / A16
-
-References (Plan sections): §6.7 classification head, §6.9 forward diagram,
-§6.10 module layout, §6.11 `src/transformer.py` spec, §8.5.5 fine-tuning
-protocol, §8.6 multi-task auxiliary (N5).
-"""
+"""TabularTransformer: embedding → encoder → pool → MLP head → logit.
+Optional aux PAY_0 head (N5), MTLM [MASK] path, temporal-decay (N3),
+feature-group attention bias (N2)."""
 
 from __future__ import annotations
 
 import logging
 import os
 from pathlib import Path
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Dict, List, Literal, Optional, Sequence
 
 import torch
 import torch.nn as nn
@@ -53,117 +23,19 @@ from transformer import FeatureGroupBias, TemporalDecayBias, TransformerEncoder
 
 logger = logging.getLogger(__name__)
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Constants tied to the canonical TOKEN_ORDER in embedding.py. Using these
-# instead of hard-coded integers makes the auxiliary-head wiring drift-safe
-# under any future TOKEN_ORDER reordering (which would also fail the
-# drift-detection guard in transformer.py's smoke test).
-# ──────────────────────────────────────────────────────────────────────────────
-
-#: Position of PAY_0 in the 23-feature block *before* [CLS] is prepended.
-#: Used by the MTLM mask path (which works on the 23-block) and by the
-#: force-mask that the ``aux_pay0`` head relies on.
-PAY_0_FEATURE_POSITION_23 = 3
-
-#: Position of PAY_0 in the full 24-token output sequence (CLS at index 0).
-#: Used to slice the encoder's hidden state when reading the PAY_0 token
-#: for the auxiliary forecast head.
-PAY_0_OUTPUT_POSITION_24 = PAY_0_FEATURE_POSITION_23 + 1
-
-#: Total number of token positions the encoder sees (CLS + 23 feature tokens).
-FULL_SEQ_LEN = 24
-
-
-# ──────────────────────────────────────────────────────────────────────────────
-# Model
-# ──────────────────────────────────────────────────────────────────────────────
+# pinned to TOKEN_ORDER in embedding.py — keep aux head drift-safe
+PAY_0_FEATURE_POSITION_23 = 3                               # 23-slot, pre-CLS
+PAY_0_OUTPUT_POSITION_24 = PAY_0_FEATURE_POSITION_23 + 1    # 24-slot, CLS at 0
+FULL_SEQ_LEN = 24                                           # CLS + 23 features
 
 
 class TabularTransformer(nn.Module):
-    """
-    End-to-end transformer for the Credit Card Default task.
+    """embedding → encoder → pool → head. Defaults land at ~28K params.
 
-    Parameters
-    ----------
-    d_model, n_heads, n_layers, d_ff
-        Encoder hyperparameters. Defaults match Plan §6.11 (~28K encoder
-        parameters + ~1.2K classification head ≈ 30K total, appropriate for
-        21K training rows).
-    dropout
-        Shared dropout default for the attention-weight, FFN-hidden, and
-        residual channels in every ``TransformerBlock``.
-    attn_dropout, ffn_dropout, residual_dropout
-        Optional per-channel overrides (Plan §6.3 / Ablation A12). Unset
-        channels inherit ``dropout``.
-    classification_dropout
-        Dropout between the two linear layers of the classification head
-        (and of the ``aux_pay0_head`` when present).
-    pool
-        Aggregation of the encoder's (B, 24, d) output into (B, d):
-
-        * ``"cls"``   — take the CLS token (position 0). BERT convention.
-        * ``"mean"``  — mean over the 23 feature tokens (CLS excluded so
-          it cannot dominate by magnitude).
-        * ``"max"``   — element-wise max over the 23 feature tokens.
-
-        Plan Ablation A5 sweeps all three.
-    use_temporal_pos
-        If True, the :class:`FeatureEmbedding` adds a learnable
-        ``nn.Embedding(6, d_model)`` to every PAY / BILL_AMT / PAY_AMT
-        token. Plan §5.4 / Ablation A7.
-    use_mask_token
-        If True, enables the ``[MASK]`` embedding path inside
-        :class:`FeatureEmbedding`. Required for MTLM pretraining (Plan §8.5
-        / Novelty N4). Implied-True whenever ``aux_pay0=True`` because the
-        aux head force-masks PAY_0.
-    temporal_decay_mode
-        Selects the :class:`TemporalDecayBias` variant (Plan §6.12.2 /
-        Novelty N3 / Ablation A22):
-
-        * ``"off"``       — no bias. Plain FT-Transformer.
-        * ``"scalar"``    — single learnable α (default for A22 on).
-        * ``"per_head"``  — one α per attention head.
-
-        The temporal layout is derived from :func:`embedding.build_temporal_layout`
-        so it cannot silently drift from the canonical TOKEN_ORDER.
-    feature_group_bias_mode
-        Selects the :class:`FeatureGroupBias` variant (Plan §6.12.1 /
-        Novelty N2 / Ablation A21):
-
-        * ``"off"``       — no group bias.
-        * ``"scalar"``    — one 5×5 learnable bias matrix shared across heads.
-        * ``"per_head"``  — one 5×5 bias matrix per attention head.
-
-        Groups are: [CLS], demographic, PAY, BILL_AMT, PAY_AMT. The
-        assignment is derived from :func:`embedding.build_group_assignment`
-        so it stays drift-safe under TOKEN_ORDER changes. Bias matrix
-        initialised to zero — model activates the prior only if it helps.
-    aux_pay0
-        If True, attach a parallel 11-class classification head that
-        predicts the raw PAY_0 value from the encoder's PAY_0 token
-        after the token has been force-masked. Plan §8.6 / Novelty N5 /
-        Ablation A16. Target is provided in the batch as ``pay_raw[:, 0]``
-        (values in [0, 10]; see tokenizer.py).
-    cat_vocab_sizes
-        Optional override for ``FeatureEmbedding`` — primarily for
-        hermetic unit tests (no disk I/O).
-
-    Forward output
-    --------------
-    ``forward(batch, *, return_attn=False)`` returns a dict with keys:
-
-    * ``"logit"`` — (B,) unnormalised default logit (losses consume logits;
-      no sigmoid applied).
-    * ``"aux_pay0_logits"`` — (B, 11) present only if ``aux_pay0=True``.
-    * ``"attn_weights"`` — ``list[Tensor (B, n_heads, 24, 24)]`` of length
-      ``n_layers``, present only if ``return_attn=True``.
-
-    References
-    ----------
-    Plan §6.7 / §6.11 for the head design (LayerNorm → Linear → GELU →
-    Dropout → Linear → sigmoid via BCEWithLogits-family loss). Plan §6.8
-    for the weight-initialisation policy (Kaiming for GELU-feeding linears,
-    Xavier for residual-feeding linears, zeros for biases).
+    mean/max pool drop CLS so it can't dominate. use_mask_token is forced on
+    when aux_pay0=True (aux head force-masks PAY_0). forward returns
+    {logit: (B,), [aux_pay0_logits: (B, 11)], [attn_weights: list of
+    (B, H, 24, 24)]}.
     """
 
     def __init__(
@@ -194,11 +66,10 @@ class TabularTransformer(nn.Module):
         self.n_heads = n_heads
         self.n_layers = n_layers
         self.pool = pool
+        self.use_temporal_pos = use_temporal_pos
         self.aux_pay0 = aux_pay0
 
-        # Embedding. The aux_pay0 path force-masks PAY_0 so it needs the
-        # [MASK] embedding machinery — we implicitly enable use_mask_token
-        # in that case even if the caller forgot.
+        # aux_pay0 force-masks PAY_0 → [MASK] must exist
         self.embedding = FeatureEmbedding(
             d_model=d_model,
             dropout=dropout,
@@ -207,8 +78,6 @@ class TabularTransformer(nn.Module):
             use_mask_token=use_mask_token or aux_pay0,
         )
 
-        # Temporal-decay bias (Novelty N3) — derive the layout from TOKEN_ORDER
-        # so the within-group distance matrix is drift-safe.
         if temporal_decay_mode != "off":
             temporal_decay: Optional[TemporalDecayBias] = TemporalDecayBias(
                 temporal_layout=build_temporal_layout(cls_offset=1),
@@ -219,8 +88,6 @@ class TabularTransformer(nn.Module):
         else:
             temporal_decay = None
 
-        # Feature-group attention bias (Novelty N2) — drift-safe group
-        # assignment derived from TOKEN_ORDER.
         if feature_group_bias_mode != "off":
             feature_group_bias: Optional[FeatureGroupBias] = FeatureGroupBias(
                 group_assignment=build_group_assignment(cls_offset=1),
@@ -244,38 +111,31 @@ class TabularTransformer(nn.Module):
             feature_group_bias=feature_group_bias,
         )
 
-        # Classification head (Plan §6.7): final LayerNorm on the pooled
-        # representation, then a 2-layer MLP projecting to a single logit.
+        # LN → 2-layer MLP → logit
         self.head_norm = nn.LayerNorm(d_model)
         self.classifier = nn.Sequential(
-            nn.Linear(d_model, d_model),     # GELU-feeding — Kaiming
+            nn.Linear(d_model, d_model),
             nn.GELU(),
             nn.Dropout(classification_dropout),
-            nn.Linear(d_model, 1),           # output — Xavier
+            nn.Linear(d_model, 1),
         )
 
-        # Auxiliary PAY_0 forecast head (Novelty N5). Symmetric to the main
-        # head but with its own LayerNorm so its representation space is
-        # decoupled from the primary classifier.
+        # aux PAY_0 head: same shape, own LN (decoupled from main)
         if aux_pay0:
             self.aux_pay0_head: Optional[nn.Sequential] = nn.Sequential(
                 nn.LayerNorm(d_model),
-                nn.Linear(d_model, d_model),                 # GELU-feeding — Kaiming
+                nn.Linear(d_model, d_model),
                 nn.GELU(),
                 nn.Dropout(classification_dropout),
-                nn.Linear(d_model, PAY_RAW_NUM_CLASSES),     # 11-class — Xavier
+                nn.Linear(d_model, PAY_RAW_NUM_CLASSES),
             )
         else:
             self.aux_pay0_head = None
 
         self._init_heads()
 
-    # ------------------------------------------------------------------ init
     def _init_heads(self) -> None:
-        """Initialise both heads per Plan §6.8:
-        GELU-feeding linears get Kaiming (He) init; final/residual-feeding
-        linears get Xavier; biases are zero. LayerNorm uses PyTorch defaults
-        (γ=1, β=0)."""
+        """Kaiming on GELU-feeding linears, Xavier on each head's last linear."""
         for container in (self.classifier, self.aux_pay0_head):
             if container is None:
                 continue
@@ -287,25 +147,20 @@ class TabularTransformer(nn.Module):
                     nn.init.xavier_normal_(lin.weight)
                 nn.init.zeros_(lin.bias)
 
-    # ----------------------------------------------------------------- pool
     def _pool(self, hidden: torch.Tensor) -> torch.Tensor:
-        """(B, 24, d) → (B, d) by CLS / mean / max aggregation."""
+        """(B, 24, d) → (B, d) by CLS / mean / max."""
         if self.pool == "cls":
             return hidden[:, 0, :]
-        # Exclude CLS (index 0) from mean/max so it cannot dominate.
+        # drop CLS so a drifted CLS norm can't swamp the mean/max
         feature_hidden = hidden[:, 1:, :]
         if self.pool == "mean":
             return feature_hidden.mean(dim=1)
-        # pool == "max"
         return feature_hidden.max(dim=1).values
 
-    # ----------------------------------------------------------- _force_mask
     def _apply_aux_force_mask(
         self, batch: Dict[str, torch.Tensor]
     ) -> Dict[str, torch.Tensor]:
-        """For ``aux_pay0=True`` force PAY_0 to be masked (OR-ed with any
-        existing mask_positions). The aux head then predicts PAY_0 from the
-        surrounding context via the forced [MASK] embedding."""
+        """force-mask PAY_0 (OR with any existing mask)."""
         B = batch["num_values"].shape[0]
         device = batch["num_values"].device
         force = torch.zeros(B, 23, dtype=torch.bool, device=device)
@@ -315,40 +170,35 @@ class TabularTransformer(nn.Module):
             force = existing.to(device) | force
         return {**batch, "mask_positions": force}
 
-    # --------------------------------------------------------------- forward
     def forward(
         self,
         batch: Dict[str, torch.Tensor],
         *,
         return_attn: bool = False,
     ) -> Dict[str, Any]:
+        """batch → {logit, [aux_pay0_logits], [attn_weights]}."""
         if self.aux_pay0:
             batch = self._apply_aux_force_mask(batch)
 
-        tokens = self.embedding(batch)                       # (B, 24, d)
-        hidden, attn_weights = self.encoder(tokens)          # (B, 24, d), list[L]
-        pooled = self._pool(hidden)                          # (B, d)
-        logit = self.classifier(self.head_norm(pooled)).squeeze(-1)  # (B,)
+        tokens = self.embedding(batch)
+        hidden, attn_weights = self.encoder(tokens)
+        pooled = self._pool(hidden)
+        logit = self.classifier(self.head_norm(pooled)).squeeze(-1)
 
         out: Dict[str, Any] = {"logit": logit}
 
         if self.aux_pay0:
-            assert self.aux_pay0_head is not None  # for the type checker
-            pay0_hidden = hidden[:, PAY_0_OUTPUT_POSITION_24, :]         # (B, d)
-            out["aux_pay0_logits"] = self.aux_pay0_head(pay0_hidden)     # (B, 11)
+            assert self.aux_pay0_head is not None
+            pay0_hidden = hidden[:, PAY_0_OUTPUT_POSITION_24, :]
+            out["aux_pay0_logits"] = self.aux_pay0_head(pay0_hidden)
 
         if return_attn:
             out["attn_weights"] = attn_weights
 
         return out
 
-    # -------------------------------------------------------- accounting API
     def count_parameters(self, trainable_only: bool = True) -> int:
-        """Total (trainable) parameter count. At plan defaults (d_model=32,
-        n_heads=4, n_layers=2, d_ff=128, dropout=0.1, pool='cls',
-        temporal_decay=off, feature_group_bias=off, aux_pay0=False) expect
-        ~28K parameters — matches the Plan §6.9 budget of ~28,000 params
-        for 21K training rows."""
+        """total (trainable) param count."""
         return sum(
             p.numel()
             for p in self.parameters()
@@ -358,18 +208,8 @@ class TabularTransformer(nn.Module):
     def parameter_count_by_module(
         self, trainable_only: bool = True,
     ) -> Dict[str, int]:
-        """Return a dict mapping top-level sub-module name → parameter count.
-
-        Useful for:
-        * Sanity-checking the ~28K Plan §6.9 budget by module contribution.
-        * Driving the parameter-breakdown plots in the training notebook.
-        * Ensuring the encoder carries the bulk of parameters (not the head).
-
-        Params NOT contained in any named sub-module (e.g. buffers, naked
-        ``nn.Parameter`` attributes on ``self``) are grouped under ``"_leaf"``.
-        """
+        """param count per top-level submodule; stray leaf params go under _leaf."""
         counts: Dict[str, int] = {}
-        # Only count Parameters, not buffers.
         seen_param_ids: set[int] = set()
         for name, module in self.named_children():
             if module is None:
@@ -381,7 +221,6 @@ class TabularTransformer(nn.Module):
                     seen_param_ids.add(id(p))
             if total:
                 counts[name] = total
-        # Leaf params directly on self.
         leaf = 0
         for p in self.parameters(recurse=False):
             if id(p) in seen_param_ids:
@@ -392,16 +231,9 @@ class TabularTransformer(nn.Module):
             counts["_leaf"] = leaf
         return counts
 
-    # ------------------------------------------------- parameter-group APIs
     def get_head_params(self) -> List[torch.nn.Parameter]:
-        """Return the parameters of the fresh classification head and
-        (if present) the auxiliary PAY_0 forecast head.
-
-        Used by ``train.build_optimizer`` to assign the *peak* learning rate
-        to the freshly-initialised head parameters during MTLM → supervised
-        fine-tuning (Plan §8.5.5). The embedding + encoder parameters get
-        the smaller ``lr * encoder_lr_ratio``.
-        """
+        """head (+ aux head) params. train.build_optimizer uses these
+        for the head group at peak lr during fine-tuning."""
         params: List[torch.nn.Parameter] = []
         for module in (self.head_norm, self.classifier, self.aux_pay0_head):
             if module is None:
@@ -410,27 +242,16 @@ class TabularTransformer(nn.Module):
         return params
 
     def get_encoder_params(self) -> List[torch.nn.Parameter]:
-        """Return the parameters of everything that *isn't* the classification
-        head — i.e. the embedding + encoder + any novelty bias modules. This
-        is the "pretrained" side of the Plan §8.5.5 two-stage optimiser."""
+        """everything not in get_head_params()."""
         head_ids = {id(p) for p in self.get_head_params()}
         return [p for p in self.parameters() if id(p) not in head_ids]
 
-    # ---------------------------------------------------- architecture summary
     def summary(self) -> str:
-        """Return a human-readable multi-line summary of the model's
-        configuration, parameter budget, and active novelty switches.
-
-        Intended for notebook / report inclusion and as a sanity check when
-        swapping ablation configurations. The string is constructed entirely
-        from live attributes — if a switch is inadvertently misconfigured,
-        ``summary()`` will show it. Does not re-create or mutate any
-        parameters.
-        """
+        """multi-line arch + param breakdown (for notebooks)."""
         n_total = self.count_parameters()
         breakdown = self.parameter_count_by_module()
         lines: List[str] = []
-        lines.append("TabularTransformer — architecture summary")
+        lines.append("TabularTransformer - architecture summary")
         lines.append("-" * 56)
         lines.append(f"  d_model           : {self.d_model}")
         lines.append(f"  n_heads           : {self.n_heads}")
@@ -451,11 +272,11 @@ class TabularTransformer(nn.Module):
         lines.append(f"  Total             : {n_total:,d} parameters")
         plan_lo, plan_hi = 20_000, 40_000
         in_plan = plan_lo <= n_total <= plan_hi
-        status = "✓ within Plan §6.9 envelope" if in_plan else "⚠ outside Plan §6.9 envelope"
-        lines.append(f"  Plan §6.9 budget  : ~28,000  →  {status}")
+        status = "within plan envelope" if in_plan else "outside plan envelope"
+        lines.append(f"  Plan budget       : ~28,000  ->  {status}")
         return "\n".join(lines)
 
-    def __repr__(self) -> str:  # noqa: D401 — override the long torch repr
+    def __repr__(self) -> str:
         return (
             f"TabularTransformer(d_model={self.d_model}, n_heads={self.n_heads}, "
             f"n_layers={self.n_layers}, pool={self.pool!r}, "
@@ -465,7 +286,6 @@ class TabularTransformer(nn.Module):
             f"params={self.count_parameters():,})"
         )
 
-    # ---------------------------------------------------- inference helpers
     @torch.no_grad()
     def predict_logits(
         self,
@@ -474,23 +294,7 @@ class TabularTransformer(nn.Module):
         *,
         return_attn: bool = False,
     ) -> Dict[str, torch.Tensor]:
-        """
-        Run the model in ``eval()`` mode over a ``DataLoader`` and return
-        per-sample logits (and optionally the per-layer attention tensors
-        concatenated along the batch axis) as CPU tensors.
-
-        Returns a dict with the keys:
-
-        * ``"logit"`` — ``(N,)`` float32 CPU tensor of pre-sigmoid scores.
-        * ``"label"`` — ``(N,)`` float32 CPU tensor of ground-truth labels
-          collected from each batch's ``"label"`` entry.
-        * ``"attn_weights"`` — only when ``return_attn=True``; a list of
-          ``n_layers`` tensors of shape ``(N, n_heads, seq_len, seq_len)``.
-
-        This helper is the canonical way to score a dataset once training
-        has completed; it replaces the hand-rolled inference loops that
-        would otherwise accumulate in the notebook / downstream scripts.
-        """
+        """loader → {logit: (N,), [label], [attn_weights]}. All on CPU."""
         self.eval()
         if device is None:
             device = next(self.parameters()).device
@@ -500,7 +304,6 @@ class TabularTransformer(nn.Module):
         attn_chunks: Optional[List[List[torch.Tensor]]] = None
 
         for batch in loader:
-            # Move only what the model needs.
             moved: Dict[str, Any] = {}
             for k, v in batch.items():
                 if isinstance(v, dict):
@@ -536,8 +339,7 @@ class TabularTransformer(nn.Module):
         loader,
         device: Optional[torch.device] = None,
     ) -> torch.Tensor:
-        """Convenience wrapper around :meth:`predict_logits` — returns the
-        sigmoid-of-logit probability tensor ``(N,)`` on CPU."""
+        """σ(predict_logits(...)) on CPU."""
         logits = self.predict_logits(loader, device=device)["logit"]
         return torch.sigmoid(logits)
 
@@ -546,31 +348,8 @@ class TabularTransformer(nn.Module):
         probabilities: Sequence[torch.Tensor],
         mode: Literal["arithmetic", "geometric"] = "arithmetic",
     ) -> torch.Tensor:
-        """
-        Combine per-seed probability vectors into a single ensemble
-        probability vector.
-
-        Parameters
-        ----------
-        probabilities
-            Sequence of 1-D probability tensors, all of identical length.
-            Typically produced by :meth:`predict_proba` on checkpoints from
-            different seeds.
-        mode
-            * ``"arithmetic"`` — simple mean. Default; the most common
-              ensembling choice for binary classifiers.
-            * ``"geometric"`` — geometric mean in log-odds space, i.e.
-              ``σ(mean(logit))``. Equivalent to averaging log-odds then
-              re-applying sigmoid; more robust to individual over-confidence.
-
-        Returns
-        -------
-        A single probability tensor ``(N,)`` on CPU.
-
-        This is the minimum-viable ensembling helper; callers that want
-        weighted or stacking ensembles should implement the aggregation
-        themselves and feed the result into their evaluation pipeline.
-        """
+        """arithmetic = mean(p); geometric = σ(mean(logit(p))) — the latter
+        shrugs off one over-confident seed."""
         if not probabilities:
             raise ValueError("probabilities cannot be empty")
         stacked = torch.stack([p.detach().cpu().float() for p in probabilities], dim=0)
@@ -583,7 +362,6 @@ class TabularTransformer(nn.Module):
             return torch.sigmoid(mean_logit)
         raise ValueError(f"mode must be 'arithmetic' or 'geometric', got {mode!r}")
 
-    # ---------------------------------------------------- pretrained loading
     def load_pretrained_encoder(
         self,
         checkpoint_path: str | os.PathLike[str],
@@ -592,61 +370,26 @@ class TabularTransformer(nn.Module):
         trust_source: bool = False,
         map_location: Optional[torch.device | str] = None,
     ) -> Dict[str, Any]:
+        """Load weights from one of two on-disk shapes:
+
+        1. full bundle — path + path.weights + path.meta.json from
+           utils.save_checkpoint; routed through utils.load_checkpoint
+           (weights-only by default).
+        2. raw state dict — a single torch.save'd file with only
+           embedding.*/encoder.* keys, as written by train_mtlm as
+           encoder_pretrained.pt.
+
+        strict=False leaves the fresh classification head alone (MTLM has no
+        head). trust_source=True disables weights_only — only use on files
+        you produced yourself.
         """
-        Load a previously-trained state dict into this model.
-
-        Accepts two on-disk artefact shapes transparently:
-
-        1. **Full checkpoint bundle** — ``<path>`` + ``<path>.weights`` +
-           ``<path>.meta.json`` as produced by
-           :func:`utils.save_checkpoint`. Detected by the presence of the
-           ``.weights`` sidecar. Routes through
-           :func:`utils.load_checkpoint` which enforces the
-           SECURITY_AUDIT C-1 weights-only default.
-        2. **Raw state dict** — a single ``torch.save(...)``-style file
-           containing only the ``embedding.*`` / ``encoder.*`` keys (this
-           is the ``encoder_pretrained.pt`` artefact emitted by
-           :mod:`src.train_mtlm`). Loaded via ``torch.load(weights_only=...)``
-           and applied with ``strict=strict``.
-
-        Intended for the MTLM → supervised fine-tuning transition
-        (Plan §8.5.5). With ``strict=False`` the matching keys are
-        applied and the extras are ignored silently; the ``classifier``,
-        ``head_norm``, and optional ``aux_pay0_head`` stay at their fresh
-        initialisation — per the plan, the supervised objective re-learns
-        the head. Use the caller-side two-stage LR in ``train.py`` to
-        honour the §8.5.5 rate-ratio recipe.
-
-        Parameters
-        ----------
-        checkpoint_path
-            Either the full-bundle ``<path>.pt`` OR a raw state-dict file.
-        strict
-            ``False`` is the intended default for the MTLM → supervised
-            transition (the classification head is absent from the MTLM
-            checkpoint by design).
-        trust_source
-            Set ``True`` only for checkpoints you produced yourself. The
-            default (``False``) uses ``weights_only=True`` at the
-            ``torch.load`` layer — no pickle execution.
-        map_location
-            Forwarded to ``torch.load``.
-
-        Returns
-        -------
-        Dict with at least a ``"metadata"`` entry (possibly empty for raw
-        state-dict files), plus ``"missing_keys"`` / ``"unexpected_keys"``
-        lists when ``strict=False``.
-        """
-        from pathlib import Path as _Path  # local alias to avoid top-level import change
-        from utils import load_checkpoint  # local import to avoid circularity
+        from pathlib import Path as _Path
+        from utils import load_checkpoint
 
         path = _Path(checkpoint_path)
         sidecar = path.with_suffix(path.suffix + ".weights")
 
         if sidecar.is_file():
-            # Full bundle — the sidecar path is what load_checkpoint actually
-            # consumes under trust_source=False.
             checkpoint = load_checkpoint(
                 path,
                 self,
@@ -661,7 +404,6 @@ class TabularTransformer(nn.Module):
             )
             return checkpoint
 
-        # Raw state dict — torch.load it directly.
         if not path.is_file():
             raise FileNotFoundError(f"No checkpoint found at: {path}")
         state = torch.load(
@@ -675,19 +417,16 @@ class TabularTransformer(nn.Module):
                 f"{path}, got {type(state).__name__}. Pass a full checkpoint "
                 "bundle if you meant load_checkpoint's optimiser-state path."
             )
-        # Shape mismatches between MTLM pretrain and supervised fine-tune are
-        # a sign of misconfiguration (different d_model or n_layers); surface
-        # them with strict=True to the user, but accept missing/extra keys.
         incompatible = self.load_state_dict(state, strict=strict)
         missing = list(getattr(incompatible, "missing_keys", []))
         unexpected = list(getattr(incompatible, "unexpected_keys", []))
         logger.info(
-            "TabularTransformer: loaded raw encoder state from %s — "
+            "TabularTransformer: loaded raw encoder state from %s - "
             "%d tensors applied (missing=%d, unexpected=%d)",
             path, len(state), len(missing), len(unexpected),
         )
         if missing:
-            logger.debug("Missing keys (OK for MTLM→supervised): %s", missing[:6])
+            logger.debug("Missing keys (OK for MTLM->supervised): %s", missing[:6])
         if unexpected:
             logger.debug("Unexpected keys (dropped): %s", unexpected[:6])
         return {
@@ -699,15 +438,10 @@ class TabularTransformer(nn.Module):
         }
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Smoke test — runs only with preprocessing outputs available.
-# ──────────────────────────────────────────────────────────────────────────────
-
 if __name__ == "__main__":
     import json
     import sys
 
-    # UTF-8 stdout so box-drawing separators print cleanly on Windows.
     for _stream in (sys.stdout, sys.stderr):
         if hasattr(_stream, "reconfigure"):
             try:
@@ -725,9 +459,8 @@ if __name__ == "__main__":
     csv_path = root / "data/processed/train_scaled.csv"
     if not (meta_path.is_file() and csv_path.is_file()):
         print(
-            "[SKIP] model.py smoke test requires preprocessing output.\n"
-            "       Run `poetry run python run_pipeline.py --preprocess-only` "
-            "first to materialise data/processed/*.csv."
+            "[SKIP] need preprocessing output — "
+            "run `poetry run python run_pipeline.py --preprocess-only` first."
         )
         sys.exit(0)
 
@@ -737,7 +470,7 @@ if __name__ == "__main__":
     ds = CreditDefaultDataset(df, cat_vocab, verbose=False)
     loader = make_loader(ds, batch_size=32, mode="val")
 
-    # ── A: plan-default configuration (~28K params, no aux head) ─────────
+    # A: defaults
     torch.manual_seed(0)
     model = TabularTransformer()
     model.eval()
@@ -745,37 +478,36 @@ if __name__ == "__main__":
     with torch.no_grad():
         out = model(batch, return_attn=True)
     n_params = model.count_parameters()
-    print(f"── A: plan defaults (d=32, h=4, L=2) ──")
-    print(f"  Logit shape:        {tuple(out['logit'].shape)}")
-    print(f"  Attn layers:        {len(out['attn_weights'])}")
-    print(f"  Per-layer attn:     {tuple(out['attn_weights'][0].shape)}")
-    print(f"  Param count:        {n_params:,} (~28K expected)")
+    print(f"-- A: defaults d=32 h=4 L=2 --")
+    print(f"  logit:    {tuple(out['logit'].shape)}")
+    print(f"  attn:     {len(out['attn_weights'])} layers, {tuple(out['attn_weights'][0].shape)}")
+    print(f"  params:   {n_params:,} (~28K)")
     assert out["logit"].shape == (32,)
     assert len(out["attn_weights"]) == 2
     assert 20_000 <= n_params <= 40_000, (
         f"param count {n_params:,} outside the [20K, 40K] plan envelope"
     )
 
-    # ── B: gradient flow through every parameter ──────────────────────────
+    # B: grad flow
     model.train()
     grad_out = model(batch)
     grad_out["logit"].sum().backward()
     no_grad = [n for n, p in model.named_parameters() if p.grad is None]
     assert not no_grad, f"no grad on {no_grad}"
-    print("\n── B: gradient flow ──")
-    print(f"  All {sum(1 for _ in model.parameters())} param groups receive gradient ✓")
+    print("\n-- B: grad flow --")
+    print(f"  all {sum(1 for _ in model.parameters())} param groups got grads")
 
-    # ── C: pool modes ──────────────────────────────────────────────────────
-    print("\n── C: pool modes ──")
+    # C: pool modes
+    print("\n-- C: pool modes --")
     for pool in ("cls", "mean", "max"):
         m = TabularTransformer(pool=pool)
         m.eval()
         with torch.no_grad():
             logit = m(batch)["logit"]
         assert logit.shape == (32,), pool
-        print(f"  pool={pool}: logit shape {tuple(logit.shape)} ✓")
+        print(f"  pool={pool}: {tuple(logit.shape)}")
 
-    # ── D: temporal decay + aux_pay0 + multi-flag composition ─────────────
+    # D: temporal decay + aux_pay0
     torch.manual_seed(0)
     m = TabularTransformer(
         d_model=32, n_heads=4, n_layers=2,
@@ -787,21 +519,21 @@ if __name__ == "__main__":
     out = m(batch, return_attn=True)
     assert "aux_pay0_logits" in out
     assert out["aux_pay0_logits"].shape == (32, PAY_RAW_NUM_CLASSES)
-    print("\n── D: temporal_pos + temporal_decay + aux_pay0 ──")
-    print(f"  Primary logit shape:    {tuple(out['logit'].shape)}")
-    print(f"  Aux PAY_0 logits shape: {tuple(out['aux_pay0_logits'].shape)}")
-    print(f"  TemporalDecayBias α:    {m.encoder.temporal_decay.alpha.item():.4f}")
+    print("\n-- D: temporal_pos + decay + aux_pay0 --")
+    print(f"  logit:       {tuple(out['logit'].shape)}")
+    print(f"  aux logits:  {tuple(out['aux_pay0_logits'].shape)}")
+    print(f"  α (decay):   {m.encoder.temporal_decay.alpha.item():.4f}")
 
-    # ── E: aux_pay0 gradient flows through the aux head ──────────────────
+    # E: aux grads
     loss = out["aux_pay0_logits"].sum()
     loss.backward()
     assert m.aux_pay0_head is not None
     for name, p in m.aux_pay0_head.named_parameters():
         assert p.grad is not None, f"no grad on aux head {name}"
         assert torch.isfinite(p.grad).all(), f"non-finite grad on aux head {name}"
-    print(f"  Aux head gradient flow: OK ({sum(1 for _ in m.aux_pay0_head.parameters())} param groups)")
+    print(f"  aux grads OK ({sum(1 for _ in m.aux_pay0_head.parameters())} groups)")
 
-    # ── F: deterministic re-run ───────────────────────────────────────────
+    # F: same seed → same output
     torch.manual_seed(1)
     m1 = TabularTransformer(d_model=32, n_heads=4, n_layers=2)
     torch.manual_seed(1)
@@ -812,6 +544,6 @@ if __name__ == "__main__":
         l1 = m1(batch)["logit"]
         l2 = m2(batch)["logit"]
     assert torch.allclose(l1, l2, atol=1e-6)
-    print("\n── F: deterministic under identical seed ✓")
+    print("\n-- F: same seed → same output")
 
-    print("\nAll TabularTransformer smoke checks passed.")
+    print("\nall smoke checks passed.")

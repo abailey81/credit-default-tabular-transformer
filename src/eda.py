@@ -1,23 +1,8 @@
-"""
-eda.py — Comprehensive Exploratory Data Analysis for the UCI Credit Card Default dataset.
+"""EDA for the UCI credit-default dataset.
 
-Produces publication-quality figures that directly motivate modelling decisions:
-  - Class distribution and imbalance analysis
-  - Feature distributions stratified by default status
-  - Temporal trajectory analysis (PAY, BILL_AMT, PAY_AMT over 6 months)
-  - Correlation structure and multicollinearity
-  - Credit utilisation and repayment ratio analysis
-  - PAY status semantic analysis (motivates tokenisation design)
-  - Feature interaction heatmaps
-  - Statistical tests for feature-target associations
-
-All figures are saved to the figures/ directory with descriptive filenames.
-
-Data is loaded through the shared :mod:`data_preprocessing` ingestion path,
-which delegates to :mod:`data_sources` for resilient API → local-fallback
-loading; passing ``mode="local"`` or ``--source local`` from the CLI runs the
-entire EDA without any network access.
-"""
+12 figures + one summary table (class balance, cat/num distributions, temporal
+trajectories, correlations, PAY semantics). Loading goes through
+:mod:`data_preprocessing`."""
 
 import os
 import warnings
@@ -33,12 +18,9 @@ from scipy.stats import chi2_contingency, mannwhitneyu, pointbiserialr
 
 warnings.filterwarnings("ignore")
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Style configuration — publication quality
-# ──────────────────────────────────────────────────────────────────────────────
 
 def set_publication_style():
-    """Configure matplotlib for clean, publication-ready figures."""
+    """Matplotlib rc: 300 DPI, serif, top/right spines off."""
     plt.rcParams.update({
         "figure.dpi": 150,
         "savefig.dpi": 300,
@@ -58,16 +40,11 @@ def set_publication_style():
         "axes.facecolor": "white",
     })
 
-# Colour palette: blue for no-default, red for default
+
 COLORS = {"No Default": "#2C73D2", "Default": "#D63031"}
 C_ND, C_D = COLORS["No Default"], COLORS["Default"]
 
-# Diverging palette for correlations
 CMAP_DIV = "RdBu_r"
-
-# ──────────────────────────────────────────────────────────────────────────────
-# Import preprocessing constants
-# ──────────────────────────────────────────────────────────────────────────────
 
 from data_preprocessing import (
     PAY_STATUS_FEATURES, BILL_AMT_FEATURES, PAY_AMT_FEATURES,
@@ -75,25 +52,17 @@ from data_preprocessing import (
     ALL_FEATURE_COLS,
 )
 
-MONTH_LABELS = ["Sep", "Aug", "Jul", "Jun", "May", "Apr"]  # PAY_0 → PAY_6 ordering
+MONTH_LABELS = ["Sep", "Aug", "Jul", "Jun", "May", "Apr"]
 
-
-# ──────────────────────────────────────────────────────────────────────────────
-# Figure 1: Class distribution
-# ──────────────────────────────────────────────────────────────────────────────
 
 def plot_class_distribution(df: pd.DataFrame, save_dir: str):
-    """
-    Visualise the class imbalance.
-    Shows both raw counts and percentage, with annotation of the imbalance ratio.
-    """
+    """DEFAULT counts (bar) + proportions (pie) with imbalance ratio."""
     fig, axes = plt.subplots(1, 2, figsize=(10, 4))
 
     counts = df[TARGET_COL].value_counts().sort_index()
     labels = ["No Default", "Default"]
     colors = [C_ND, C_D]
 
-    # Bar chart
     ax = axes[0]
     bars = ax.bar(labels, counts.values, color=colors, edgecolor="white", linewidth=1.5)
     for bar, count in zip(bars, counts.values):
@@ -103,7 +72,6 @@ def plot_class_distribution(df: pd.DataFrame, save_dir: str):
     ax.set_title("(a) Class Counts")
     ax.set_ylim(0, counts.max() * 1.15)
 
-    # Pie chart with imbalance ratio
     ax = axes[1]
     wedges, texts, autotexts = ax.pie(
         counts.values, labels=labels, colors=colors, autopct="%1.1f%%",
@@ -116,7 +84,7 @@ def plot_class_distribution(df: pd.DataFrame, save_dir: str):
 
     imbalance = counts[0] / counts[1]
     fig.suptitle(
-        f"Target Distribution — Imbalance Ratio {imbalance:.1f}:1",
+        f"Target Distribution - Imbalance Ratio {imbalance:.1f}:1",
         fontsize=13, fontweight="bold", y=1.02,
     )
     plt.tight_layout()
@@ -125,15 +93,8 @@ def plot_class_distribution(df: pd.DataFrame, save_dir: str):
     print("[FIG 01] Class distribution")
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Figure 2: Categorical feature distributions by default status
-# ──────────────────────────────────────────────────────────────────────────────
-
 def plot_categorical_by_target(df: pd.DataFrame, save_dir: str):
-    """
-    For each categorical feature, show the default rate per category as grouped bars.
-    Includes chi-squared test p-values to assess statistical significance.
-    """
+    """Default rate per SEX/EDUCATION/MARRIAGE level, with χ² annotations."""
     cat_features = {
         "SEX": {1: "Male", 2: "Female"},
         "EDUCATION": {1: "Grad School", 2: "University", 3: "High School", 4: "Others"},
@@ -145,15 +106,12 @@ def plot_categorical_by_target(df: pd.DataFrame, save_dir: str):
     for idx, (feat, label_map) in enumerate(cat_features.items()):
         ax = axes[idx]
 
-        # Compute default rate per category
         grouped = df.groupby(feat)[TARGET_COL].agg(["mean", "count"])
         grouped.index = grouped.index.map(label_map)
 
-        # Chi-squared test
         contingency = pd.crosstab(df[feat], df[TARGET_COL])
         chi2, p_val, dof, expected = chi2_contingency(contingency)
 
-        # Stacked bar showing default rate
         n_cats = len(grouped)
         x = np.arange(n_cats)
         default_rates = grouped["mean"]
@@ -164,7 +122,6 @@ def plot_categorical_by_target(df: pd.DataFrame, save_dir: str):
         bars_d = ax.bar(x, default_rates, bottom=1 - default_rates, color=C_D,
                         label="Default", edgecolor="white", linewidth=0.5)
 
-        # Annotate default rate
         for i, (rate, n) in enumerate(zip(default_rates, counts)):
             ax.text(i, 1.02, f"{rate:.1%}\n(n={n:,})", ha="center", fontsize=7, va="bottom")
 
@@ -173,7 +130,7 @@ def plot_categorical_by_target(df: pd.DataFrame, save_dir: str):
         ax.set_ylim(0, 1.18)
         ax.set_ylabel("Proportion")
         p_str = f"p < 0.001" if p_val < 0.001 else f"p = {p_val:.3f}"
-        ax.set_title(f"{feat}\nχ² = {chi2:.1f}, {p_str}")
+        ax.set_title(f"{feat}\n\u03c7\u00b2 = {chi2:.1f}, {p_str}")
 
         if idx == 0:
             ax.legend(loc="lower left", frameon=True, framealpha=0.9)
@@ -186,15 +143,8 @@ def plot_categorical_by_target(df: pd.DataFrame, save_dir: str):
     print("[FIG 02] Categorical features by target")
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Figure 3: Numerical feature distributions (LIMIT_BAL, AGE)
-# ──────────────────────────────────────────────────────────────────────────────
-
 def plot_numerical_distributions(df: pd.DataFrame, save_dir: str):
-    """
-    KDE + histogram for LIMIT_BAL and AGE, stratified by default status.
-    Includes Mann-Whitney U test for statistical significance.
-    """
+    """LIMIT_BAL / AGE KDE+hist by default status, Mann-Whitney U annotated."""
     fig, axes = plt.subplots(1, 2, figsize=(12, 4.5))
 
     for idx, feat in enumerate(["LIMIT_BAL", "AGE"]):
@@ -202,9 +152,7 @@ def plot_numerical_distributions(df: pd.DataFrame, save_dir: str):
         d0 = df[df[TARGET_COL] == 0][feat]
         d1 = df[df[TARGET_COL] == 1][feat]
 
-        # Mann-Whitney U test
         U, p_val = mannwhitneyu(d0, d1, alternative="two-sided")
-        # Effect size: rank-biserial correlation
         n0, n1 = len(d0), len(d1)
         r_rb = 1 - (2 * U) / (n0 * n1)
 
@@ -233,24 +181,12 @@ def plot_numerical_distributions(df: pd.DataFrame, save_dir: str):
     print("[FIG 03] Numerical distributions")
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Figure 4: PAY status semantic analysis (CRITICAL for tokenisation design)
-# ──────────────────────────────────────────────────────────────────────────────
-
 def plot_pay_status_analysis(df: pd.DataFrame, save_dir: str):
-    """
-    Detailed analysis of PAY feature semantics.
-    Shows:
-      (a) Distribution of PAY_0 values by default status — reveals the categorical structure
-      (b) Default rate by PAY_0 value — shows the non-linear risk profile
-      (c) Heatmap of PAY value distributions across 6 months
-
-    This figure directly motivates the PAY tokenisation design decision.
-    """
+    """PAY_0 dist by default + default rate vs PAY_0 + cross-month PAY heatmap.
+    Motivates the hybrid PAY tokenisation (N1)."""
     fig = plt.figure(figsize=(16, 10))
     gs = gridspec.GridSpec(2, 2, height_ratios=[1, 1], hspace=0.35, wspace=0.3)
 
-    # (a) PAY_0 distribution by default
     ax = fig.add_subplot(gs[0, 0])
     pay_vals = sorted(df["PAY_0"].unique())
     d0_counts = df[df[TARGET_COL] == 0]["PAY_0"].value_counts().reindex(pay_vals, fill_value=0)
@@ -267,11 +203,9 @@ def plot_pay_status_analysis(df: pd.DataFrame, save_dir: str):
     ax.set_title("(a) PAY_0 Distribution by Default Status")
     ax.legend()
 
-    # Annotate semantic meaning
     ax.annotate("No bill", xy=(0, d0_counts.iloc[0]), xytext=(-0.5, d0_counts.iloc[0] * 1.1),
                 fontsize=7, fontstyle="italic", color="gray")
 
-    # (b) Default rate by PAY_0 value
     ax = fig.add_subplot(gs[0, 1])
     default_rates = df.groupby("PAY_0")[TARGET_COL].mean()
     counts = df.groupby("PAY_0").size()
@@ -291,9 +225,8 @@ def plot_pay_status_analysis(df: pd.DataFrame, save_dir: str):
     ax.set_xticklabels(pay_vals)
     ax.set_xlabel("PAY_0 Value")
     ax.set_ylabel("Default Rate")
-    ax.set_title("(b) Default Rate by PAY_0 — Non-linear Risk Profile")
+    ax.set_title("(b) Default Rate by PAY_0 - Non-linear Risk Profile")
 
-    # Annotate the semantic zones
     ax.axvspan(-0.5, 2.5, alpha=0.08, color="green")
     ax.axvspan(2.5, len(pay_vals) - 0.5, alpha=0.08, color="red")
     ax.text(1, ax.get_ylim()[1] * 0.92, "Categorical\nzone (-2,-1,0)",
@@ -301,10 +234,8 @@ def plot_pay_status_analysis(df: pd.DataFrame, save_dir: str):
     ax.text(len(pay_vals) - 3, ax.get_ylim()[1] * 0.92, "Ordinal\ndelinquency",
             ha="center", fontsize=7, color="red", fontweight="bold")
 
-    # (c) PAY value heatmap across 6 months (default vs non-default)
     ax = fig.add_subplot(gs[1, :])
 
-    # Compute proportion of each PAY value for defaulters and non-defaulters
     all_pay_vals = sorted(set().union(*[set(df[c].unique()) for c in PAY_STATUS_FEATURES]))
 
     heatmap_data = []
@@ -312,7 +243,7 @@ def plot_pay_status_analysis(df: pd.DataFrame, save_dir: str):
     for target_val, label in [(0, "No Default"), (1, "Default")]:
         subset = df[df[TARGET_COL] == target_val]
         for col, month in zip(PAY_STATUS_FEATURES, MONTH_LABELS):
-            row_label = f"{label} — {month}"
+            row_label = f"{label} - {month}"
             proportions = subset[col].value_counts(normalize=True).reindex(all_pay_vals, fill_value=0)
             heatmap_data.append(proportions.values)
             row_labels.append(row_label)
@@ -322,29 +253,17 @@ def plot_pay_status_analysis(df: pd.DataFrame, save_dir: str):
     sns.heatmap(heatmap_df, ax=ax, cmap="YlOrRd", annot=True, fmt=".2f",
                 linewidths=0.5, cbar_kws={"label": "Proportion"}, annot_kws={"size": 6})
     ax.set_xlabel("PAY Status Value")
-    ax.set_title("(c) PAY Status Distribution Across Months — Defaulters vs Non-Defaulters")
+    ax.set_title("(c) PAY Status Distribution Across Months - Defaulters vs Non-Defaulters")
 
-    fig.suptitle("PAY Feature Semantic Analysis — Motivating Tokenisation Design",
+    fig.suptitle("PAY Feature Semantic Analysis - Motivating Tokenisation Design",
                  fontsize=14, fontweight="bold", y=1.01)
     fig.savefig(f"{save_dir}/fig04_pay_status_analysis.png")
     plt.close(fig)
     print("[FIG 04] PAY status semantic analysis")
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Figure 5: Temporal trajectories — defaulters vs non-defaulters
-# ──────────────────────────────────────────────────────────────────────────────
-
 def plot_temporal_trajectories(df: pd.DataFrame, save_dir: str):
-    """
-    Plot the 6-month temporal trajectories for three feature groups:
-      (a) Repayment status (PAY_0 → PAY_6): shows escalating delinquency in defaulters
-      (b) Bill amounts (BILL_AMT1 → BILL_AMT6): shows balance trends
-      (c) Payment amounts (PAY_AMT1 → PAY_AMT6): shows declining payments in defaulters
-
-    These trajectories are the primary motivation for using a sequence model (transformer)
-    rather than treating features as an unordered bag.
-    """
+    """6-month mean trajectories (PAY / BILL_AMT / PAY_AMT) with 95% CI."""
     fig, axes = plt.subplots(1, 3, figsize=(16, 5))
 
     feature_groups = [
@@ -359,7 +278,7 @@ def plot_temporal_trajectories(df: pd.DataFrame, save_dir: str):
         for target_val, label, color in [(0, "No Default", C_ND), (1, "Default", C_D)]:
             subset = df[df[TARGET_COL] == target_val][cols]
             means = subset.mean()
-            stds = subset.std() / np.sqrt(len(subset))  # standard error
+            stds = subset.std() / np.sqrt(len(subset))
 
             ax.plot(MONTH_LABELS, means.values, marker="o", color=color,
                     label=label, linewidth=2, markersize=5)
@@ -372,7 +291,7 @@ def plot_temporal_trajectories(df: pd.DataFrame, save_dir: str):
         ax.set_ylabel(ylabel)
         ax.set_title(f"({chr(97 + idx)}) {title}")
         ax.legend()
-        ax.invert_xaxis()  # April → September (chronological left-to-right)
+        ax.invert_xaxis()
 
     fig.suptitle(
         "Temporal Trajectories: Diverging Patterns Between Defaulters and Non-Defaulters\n"
@@ -385,24 +304,14 @@ def plot_temporal_trajectories(df: pd.DataFrame, save_dir: str):
     print("[FIG 05] Temporal trajectories")
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Figure 6: Credit utilisation analysis
-# ──────────────────────────────────────────────────────────────────────────────
-
 def plot_utilisation_analysis(df: pd.DataFrame, save_dir: str):
-    """
-    Analyse credit utilisation (BILL_AMT / LIMIT_BAL) as a risk indicator.
-      (a) Distribution of most recent utilisation ratio by default
-      (b) Temporal evolution of utilisation for defaulters vs non-defaulters
-    """
+    """BILL_AMT/LIMIT_BAL utilisation: Sep distribution + 6-month trajectory."""
     fig, axes = plt.subplots(1, 2, figsize=(12, 5))
 
-    # Compute utilisation ratios on a copy (no side effects on input df)
     df_util = df.copy()
     for i in range(1, 7):
         df_util[f"_UTIL_{i}"] = df_util[f"BILL_AMT{i}"] / df_util["LIMIT_BAL"].replace(0, np.nan)
 
-    # (a) Most recent utilisation (September)
     ax = axes[0]
     for target_val, label, color in [(0, "No Default", C_ND), (1, "Default", C_D)]:
         subset = df_util[df_util[TARGET_COL] == target_val]["_UTIL_1"].clip(-0.5, 2)
@@ -418,7 +327,6 @@ def plot_utilisation_analysis(df: pd.DataFrame, save_dir: str):
     ax.set_title("(a) September Utilisation Distribution")
     ax.legend()
 
-    # (b) Temporal utilisation
     ax = axes[1]
     util_cols = [f"_UTIL_{i}" for i in range(1, 7)]
     for target_val, label, color in [(0, "No Default", C_ND), (1, "Default", C_D)]:
@@ -433,7 +341,7 @@ def plot_utilisation_analysis(df: pd.DataFrame, save_dir: str):
     ax.legend()
     ax.invert_xaxis()
 
-    fig.suptitle("Credit Utilisation Analysis — A Key Risk Indicator",
+    fig.suptitle("Credit Utilisation Analysis - A Key Risk Indicator",
                  fontsize=13, fontweight="bold", y=1.02)
     plt.tight_layout()
     fig.savefig(f"{save_dir}/fig06_utilisation_analysis.png")
@@ -441,18 +349,8 @@ def plot_utilisation_analysis(df: pd.DataFrame, save_dir: str):
     print("[FIG 06] Utilisation analysis")
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Figure 7: Correlation heatmap
-# ──────────────────────────────────────────────────────────────────────────────
-
 def plot_correlation_heatmap(df: pd.DataFrame, save_dir: str):
-    """
-    Full correlation matrix of all 23 features + target.
-    Highlights:
-      - Strong autocorrelation among BILL_AMT features (redundancy)
-      - PAY features correlated with target (predictive signal)
-      - Potential multicollinearity issues
-    """
+    """Lower-triangle Pearson r over the 23 features + DEFAULT."""
     numeric_cols = [c for c in ALL_FEATURE_COLS if c in df.select_dtypes(include=[np.number]).columns]
     corr = df[numeric_cols + [TARGET_COL]].corr()
 
@@ -465,7 +363,7 @@ def plot_correlation_heatmap(df: pd.DataFrame, save_dir: str):
                 annot=True, fmt=".2f", annot_kws={"size": 5},
                 vmin=-1, vmax=1)
     ax.set_title("Feature Correlation Matrix (Lower Triangle)\n"
-                 "Note: Strong BILL_AMT autocorrelation; PAY features most correlated with target",
+                 "Strong BILL_AMT autocorrelation; PAY features most correlated with target",
                  fontsize=12, fontweight="bold")
     plt.tight_layout()
     fig.savefig(f"{save_dir}/fig07_correlation_heatmap.png")
@@ -473,17 +371,8 @@ def plot_correlation_heatmap(df: pd.DataFrame, save_dir: str):
     print("[FIG 07] Correlation heatmap")
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Figure 8: Feature-target association strength
-# ──────────────────────────────────────────────────────────────────────────────
-
 def plot_feature_target_association(df: pd.DataFrame, save_dir: str):
-    """
-    Compute and rank features by their association with the target variable.
-    - Numerical features: point-biserial correlation
-    - Categorical / PAY features: Cramér's V
-    This provides an initial feature importance ranking before any modelling.
-    """
+    """Feature → DEFAULT ranking. |r_pb| for numerical + PAY, Cramér's V for cat."""
     def cramers_v(x, y):
         confusion = pd.crosstab(x, y)
         chi2, _, _, _ = chi2_contingency(confusion)
@@ -493,22 +382,18 @@ def plot_feature_target_association(df: pd.DataFrame, save_dir: str):
 
     associations = {}
 
-    # Point-biserial for numericals
     for col in NUMERICAL_FEATURES:
         r, p = pointbiserialr(df[TARGET_COL], df[col])
         associations[col] = {"strength": abs(r), "metric": "|r_pb|", "p_value": p}
 
-    # Cramér's V for categoricals
     for col in CATEGORICAL_FEATURES:
         v = cramers_v(df[col], df[TARGET_COL])
-        associations[col] = {"strength": v, "metric": "Cramér's V", "p_value": np.nan}
+        associations[col] = {"strength": v, "metric": "Cramer's V", "p_value": np.nan}
 
-    # Point-biserial for PAY features (treating as ordinal)
     for col in PAY_STATUS_FEATURES:
         r, p = pointbiserialr(df[TARGET_COL], df[col])
         associations[col] = {"strength": abs(r), "metric": "|r_pb|", "p_value": p}
 
-    # Sort by strength
     assoc_df = pd.DataFrame(associations).T.sort_values("strength", ascending=True)
 
     fig, ax = plt.subplots(figsize=(8, 10))
@@ -516,25 +401,24 @@ def plot_feature_target_association(df: pd.DataFrame, save_dir: str):
     colors = []
     for feat in assoc_df.index:
         if feat in PAY_STATUS_FEATURES:
-            colors.append("#E17055")   # orange for PAY
+            colors.append("#E17055")
         elif feat in CATEGORICAL_FEATURES:
-            colors.append("#00B894")   # green for categorical
+            colors.append("#00B894")
         elif feat in BILL_AMT_FEATURES:
-            colors.append("#6C5CE7")   # purple for BILL_AMT
+            colors.append("#6C5CE7")
         elif feat in PAY_AMT_FEATURES:
-            colors.append("#FDCB6E")   # yellow for PAY_AMT
+            colors.append("#FDCB6E")
         else:
-            colors.append("#74B9FF")   # blue for other numerical
+            colors.append("#74B9FF")
 
     ax.barh(range(len(assoc_df)), assoc_df["strength"], color=colors, edgecolor="white")
     ax.set_yticks(range(len(assoc_df)))
     ax.set_yticklabels(assoc_df.index)
     ax.set_xlabel("Association Strength")
     ax.set_title("Feature-Target Association Strength\n"
-                 "(Point-biserial |r| for numerical, Cramér's V for categorical)",
+                 "(Point-biserial |r| for numerical, Cramer's V for categorical)",
                  fontweight="bold")
 
-    # Legend for feature groups
     legend_elements = [
         Patch(facecolor="#E17055", label="PAY Status"),
         Patch(facecolor="#74B9FF", label="Demographic (num.)"),
@@ -550,28 +434,19 @@ def plot_feature_target_association(df: pd.DataFrame, save_dir: str):
     print("[FIG 08] Feature-target association")
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Figure 9: BILL_AMT autocorrelation — motivates attention across time
-# ──────────────────────────────────────────────────────────────────────────────
-
 def plot_bill_amt_autocorrelation(df: pd.DataFrame, save_dir: str):
-    """
-    Show the strong autocorrelation among BILL_AMT features.
-    This motivates using self-attention to capture temporal dependencies
-    rather than treating each month independently.
-    """
+    """BILL_AMT cross-month corr heatmap + autocorr-vs-lag by default status.
+    Motivates self-attention across time steps."""
     bill_corr = df[BILL_AMT_FEATURES].corr()
 
     fig, axes = plt.subplots(1, 2, figsize=(12, 5))
 
-    # (a) Correlation matrix of BILL_AMT
     ax = axes[0]
     sns.heatmap(bill_corr, ax=ax, cmap="YlOrRd", annot=True, fmt=".3f",
                 square=True, linewidths=0.5, vmin=0.5, vmax=1,
                 xticklabels=MONTH_LABELS, yticklabels=MONTH_LABELS)
     ax.set_title("(a) BILL_AMT Cross-Month Correlation")
 
-    # (b) Correlation as a function of lag
     ax = axes[1]
     lags = []
     corrs_nd = []
@@ -596,7 +471,7 @@ def plot_bill_amt_autocorrelation(df: pd.DataFrame, save_dir: str):
     ax.legend()
     ax.set_ylim(0.5, 1.0)
 
-    fig.suptitle("Bill Amount Temporal Structure — Motivating Self-Attention over Time Steps",
+    fig.suptitle("Bill Amount Temporal Structure - Motivating Self-Attention over Time Steps",
                  fontsize=12, fontweight="bold", y=1.02)
     plt.tight_layout()
     fig.savefig(f"{save_dir}/fig09_bill_amt_autocorrelation.png")
@@ -604,22 +479,11 @@ def plot_bill_amt_autocorrelation(df: pd.DataFrame, save_dir: str):
     print("[FIG 09] BILL_AMT autocorrelation")
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Figure 10: Feature interaction analysis — attention should capture these
-# ──────────────────────────────────────────────────────────────────────────────
-
 def plot_feature_interactions(df: pd.DataFrame, save_dir: str):
-    """
-    Visualise key feature interactions that motivate the use of self-attention:
-      (a) LIMIT_BAL vs BILL_AMT1: credit utilisation pattern
-      (b) PAY_0 vs LIMIT_BAL: delinquency interacts with credit limit
-      (c) AGE vs default rate by education level
-
-    Self-attention naturally captures pairwise interactions like these.
-    """
+    """LIMIT_BAL × BILL_AMT1 scatter, LIMIT_BAL-by-PAY_0 box, default rate
+    across Age × Education."""
     fig, axes = plt.subplots(1, 3, figsize=(16, 5))
 
-    # (a) LIMIT_BAL vs BILL_AMT1
     ax = axes[0]
     sample = df.sample(n=5000, random_state=42)
     ax.scatter(sample[sample[TARGET_COL] == 0]["LIMIT_BAL"],
@@ -635,7 +499,6 @@ def plot_feature_interactions(df: pd.DataFrame, save_dir: str):
     ax.set_title("(a) Credit Utilisation Pattern")
     ax.legend(markerscale=3)
 
-    # (b) PAY_0 vs LIMIT_BAL — boxplot
     ax = axes[1]
     pay0_vals = sorted(df["PAY_0"].unique())
     data_boxes = [df[df["PAY_0"] == v]["LIMIT_BAL"] for v in pay0_vals]
@@ -651,7 +514,6 @@ def plot_feature_interactions(df: pd.DataFrame, save_dir: str):
     ax.set_ylabel("Credit Limit (NT$)")
     ax.set_title("(b) Credit Limit by Payment Status\n(colour = default rate)")
 
-    # (c) Age vs default rate by education
     ax = axes[2]
     edu_labels = {1: "Grad School", 2: "University", 3: "High School", 4: "Others"}
     for edu_val, edu_label in edu_labels.items():
@@ -664,10 +526,10 @@ def plot_feature_interactions(df: pd.DataFrame, save_dir: str):
 
     ax.set_xlabel("Age")
     ax.set_ylabel("Default Rate")
-    ax.set_title("(c) Default Rate by Age × Education")
+    ax.set_title("(c) Default Rate by Age x Education")
     ax.legend(fontsize=7)
 
-    fig.suptitle("Feature Interactions — Pairwise Patterns Self-Attention Can Capture",
+    fig.suptitle("Feature Interactions - Pairwise Patterns Self-Attention Can Capture",
                  fontsize=13, fontweight="bold", y=1.02)
     plt.tight_layout()
     fig.savefig(f"{save_dir}/fig10_feature_interactions.png")
@@ -675,22 +537,13 @@ def plot_feature_interactions(df: pd.DataFrame, save_dir: str):
     print("[FIG 10] Feature interactions")
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Figure 11: PAY transition analysis — sequential structure
-# ──────────────────────────────────────────────────────────────────────────────
-
 def plot_pay_transitions(df: pd.DataFrame, save_dir: str):
-    """
-    Analyse transitions between consecutive PAY values (month-to-month).
-    Shows transition matrices for defaulters vs non-defaulters.
-    This reveals the Markov-like sequential structure that a transformer can learn.
-    """
+    """Aug → Sep PAY transition heatmaps, one per default class."""
     fig, axes = plt.subplots(1, 2, figsize=(14, 6))
 
     for target_val, label, ax in [(0, "No Default", axes[0]), (1, "Default", axes[1])]:
         subset = df[df[TARGET_COL] == target_val]
 
-        # Build transition counts from PAY_2 → PAY_0 (Aug → Sep)
         transitions = pd.crosstab(
             subset["PAY_2"].clip(-2, 4),
             subset["PAY_0"].clip(-2, 4),
@@ -701,9 +554,9 @@ def plot_pay_transitions(df: pd.DataFrame, save_dir: str):
                     linewidths=0.5, annot_kws={"size": 7}, vmin=0, vmax=0.8)
         ax.set_xlabel("PAY_0 (September)")
         ax.set_ylabel("PAY_2 (August)")
-        ax.set_title(f"{label}: Aug → Sep Transition Probabilities")
+        ax.set_title(f"{label}: Aug -> Sep Transition Probabilities")
 
-    fig.suptitle("Payment Status Transitions — Sequential Dependencies\n"
+    fig.suptitle("Payment Status Transitions - Sequential Dependencies\n"
                  "Defaulters show higher transition probabilities toward delinquency",
                  fontsize=12, fontweight="bold", y=1.03)
     plt.tight_layout()
@@ -712,16 +565,8 @@ def plot_pay_transitions(df: pd.DataFrame, save_dir: str):
     print("[FIG 11] PAY transitions")
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Figure 12: Summary statistics table
-# ──────────────────────────────────────────────────────────────────────────────
-
 def generate_summary_statistics(df: pd.DataFrame, save_dir: str):
-    """
-    Generate a comprehensive summary statistics table for the report.
-    Includes mean, std, median, min, max, skewness, and kurtosis for each feature,
-    split by default status.
-    """
+    """Per-feature mean/std/median/skew/kurt split by default. CSV + LaTeX."""
     stats_list = []
     for col in ALL_FEATURE_COLS:
         row = {
@@ -739,7 +584,6 @@ def generate_summary_statistics(df: pd.DataFrame, save_dir: str):
     stats_df = pd.DataFrame(stats_list)
     stats_df.to_csv(f"{save_dir}/summary_statistics.csv", index=False, float_format="%.3f")
 
-    # Also save as LaTeX for the report
     latex = stats_df.to_latex(index=False, float_format="%.2f", escape=True)
     with open(f"{save_dir}/summary_statistics.tex", "w") as f:
         f.write(latex)
@@ -748,18 +592,10 @@ def generate_summary_statistics(df: pd.DataFrame, save_dir: str):
     return stats_df
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Figure 13: Repayment ratio analysis
-# ──────────────────────────────────────────────────────────────────────────────
-
 def plot_repayment_ratio(df: pd.DataFrame, save_dir: str):
-    """
-    Analyse PAY_AMT / BILL_AMT (repayment ratio) over time.
-    Defaulters tend to pay a smaller fraction of their bill.
-    """
+    """Repayment ratio (PAY_AMT / |BILL_AMT|): Sep dist + 6-month medians."""
     fig, axes = plt.subplots(1, 2, figsize=(12, 5))
 
-    # Compute repayment ratios on a copy (no side effects on input df)
     df_repay = df.copy()
     repay_cols = []
     for i in range(1, 7):
@@ -768,7 +604,6 @@ def plot_repayment_ratio(df: pd.DataFrame, save_dir: str):
         df_repay[col] = (df_repay[f"PAY_AMT{i}"] / denom).clip(0, 3)
         repay_cols.append(col)
 
-    # (a) Distribution of September repayment ratio
     ax = axes[0]
     for target_val, label, color in [(0, "No Default", C_ND), (1, "Default", C_D)]:
         vals = df_repay[df_repay[TARGET_COL] == target_val]["_REPAY_1"].dropna().clip(0, 2)
@@ -780,7 +615,6 @@ def plot_repayment_ratio(df: pd.DataFrame, save_dir: str):
     ax.set_title("(a) September Repayment Ratio")
     ax.legend()
 
-    # (b) Temporal
     ax = axes[1]
     for target_val, label, color in [(0, "No Default", C_ND), (1, "Default", C_D)]:
         subset = df_repay[df_repay[TARGET_COL] == target_val][repay_cols]
@@ -793,7 +627,7 @@ def plot_repayment_ratio(df: pd.DataFrame, save_dir: str):
     ax.legend()
     ax.invert_xaxis()
 
-    fig.suptitle("Repayment Ratio Analysis — Defaulters Consistently Underpay",
+    fig.suptitle("Repayment Ratio Analysis - Defaulters Consistently Underpay",
                  fontsize=12, fontweight="bold", y=1.02)
     plt.tight_layout()
     fig.savefig(f"{save_dir}/fig13_repayment_ratio.png")
@@ -801,9 +635,7 @@ def plot_repayment_ratio(df: pd.DataFrame, save_dir: str):
     print("[FIG 13] Repayment ratio analysis")
 
 
-# ──────────────────────────────────────────────────────────────────────────────
 # Master EDA runner
-# ──────────────────────────────────────────────────────────────────────────────
 
 def run_eda(
     data_path: Optional[str] = None,
@@ -812,20 +644,11 @@ def run_eda(
     mode: str = "auto",
     allow_fallback: bool = True,
 ):
-    """
-    Run the complete EDA pipeline and generate all figures.
-
-    Args:
-        data_path: Optional explicit local .xls/.xlsx file. Bypasses the
-            chained loader when set.
-        save_dir: Output directory for figures.
-        mode: Data source mode (``"auto"``/``"api"``/``"local"``).
-        allow_fallback: If False, disables fallback in ``"auto"`` mode.
-    """
+    """Run the full EDA: 12 figures + summary stats table.
+    ``mode`` / ``allow_fallback`` forward to :mod:`data_sources`."""
     os.makedirs(save_dir, exist_ok=True)
     set_publication_style()
 
-    # Load and clean data (same as preprocessing, but keep unscaled for EDA)
     from data_preprocessing import load_raw_data, normalise_schema, clean_categoricals
 
     df = load_raw_data(data_path, mode=mode, allow_fallback=allow_fallback)
@@ -835,11 +658,10 @@ def run_eda(
     print(f"\n{'='*60}")
     print("EXPLORATORY DATA ANALYSIS")
     print(f"{'='*60}")
-    print(f"Dataset: {len(df):,} rows × {len(df.columns)} columns")
+    print(f"Dataset: {len(df):,} rows x {len(df.columns)} columns")
     print(f"Default rate: {df[TARGET_COL].mean():.4f} ({df[TARGET_COL].sum():,} / {len(df):,})")
     print(f"{'='*60}\n")
 
-    # Generate all figures
     plot_class_distribution(df, save_dir)
     plot_categorical_by_target(df, save_dir)
     plot_numerical_distributions(df, save_dir)
@@ -860,8 +682,6 @@ def run_eda(
 
     return df, stats_df
 
-
-# ──────────────────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
     run_eda(None)
