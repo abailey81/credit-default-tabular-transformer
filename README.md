@@ -91,6 +91,22 @@ and [`results/head_to_head_summary.txt`](results/head_to_head_summary.txt).
 
 <br>
 
+## Section 4 (Experiments & Discussion) evidence pack
+
+Every claim the report makes in Section 4 is backed by a committed artefact in this repo. Regenerate them all with `python src/repro.py`.
+
+| Claim | Backing artefact | Source script |
+|---|---|---|
+| Transformer ECE ≈ 0.26 → **0.008 after Platt** (no AUC loss) | [`results/calibration/calibration_metrics.csv`](results/calibration/calibration_metrics.csv) + [`figures/calibration_reliability.png`](figures/calibration_reliability.png) | [`src/calibration.py`](src/calibration.py) |
+| RF tuned beats transformer by 0.005 AUC — **not significant** at FDR 0.05 | [`results/significance/pairwise_tests.csv`](results/significance/pairwise_tests.csv) | [`src/significance.py`](src/significance.py) |
+| 4.5K test split has 80% power only for AUC gaps ≥ 0.02 | [`results/significance/power_analysis.csv`](results/significance/power_analysis.csv) | [`src/significance.py`](src/significance.py) |
+| MC-dropout refuse-to-predict: retained AUC 0.779 → 0.85 at 50% abstention | [`results/uncertainty/refuse_curve.csv`](results/uncertainty/refuse_curve.csv) + [`figures/uncertainty_refuse_curve.png`](figures/uncertainty_refuse_curve.png) | [`src/uncertainty.py`](src/uncertainty.py) |
+| Subgroup fairness: Male/Female AUC gap 0.011; EDUCATION-"Other" (n=61) not reportable | [`results/fairness/subgroup_metrics.csv`](results/fairness/subgroup_metrics.csv) + [`figures/fairness_disparity.png`](figures/fairness_disparity.png) | [`src/fairness.py`](src/fairness.py) |
+| Derivative artefacts all regenerate bit-stably | [`results/repro/reproducibility_report.json`](results/repro/reproducibility_report.json) | [`src/repro.py`](src/repro.py) |
+| Responsible-AI model card + data sheet | [`docs/MODEL_CARD.md`](docs/MODEL_CARD.md) + [`docs/DATA_SHEET.md`](docs/DATA_SHEET.md) | — |
+
+<br>
+
 ## Key EDA Findings
 
 These findings directly motivate the architectural decisions in Steps 3--4.

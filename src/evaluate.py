@@ -78,9 +78,10 @@ REPORTED_METRICS: Tuple[str, ...] = (
     "brier",
 )
 
-#: RF-only columns — the committed rf_metrics.csv doesn't carry ECE / Brier /
-#: Cohen's kappa. We leave those as NaN in the comparison table rather than
-#: re-fitting the RF or faking values.
+#: RF metrics carried by the aggregate ``rf_metrics.csv``. When a full RF
+#: prediction vector is available (via ``--rf-predictions``), every entry
+#: in :data:`REPORTED_METRICS` is computed instead — including the ECE,
+#: Brier, kappa, specificity columns that the aggregate CSV omits.
 _RF_METRIC_COLUMNS: Tuple[str, ...] = (
     "auc_roc", "auc_pr", "f1", "accuracy", "precision", "recall",
 )
@@ -126,6 +127,32 @@ def load_test_metrics(run_dir: Path) -> Dict[str, Any]:
         "run_name": run_dir.name,
         "metrics": dict(payload["metrics"]),
         "threshold": float(payload.get("threshold", DEFAULT_THRESHOLD)),
+        "y_true": preds["y_true"],
+        "y_prob": preds["y_prob"],
+        "y_pred": preds["y_pred"],
+    }
+
+
+def load_rf_from_predictions(rf_dir: Path) -> Optional[Dict[str, Any]]:
+    """Load a full per-row RF test-set prediction artefact (produced by
+    ``src/rf_predictions.py``) and compute every entry in
+    :data:`REPORTED_METRICS` from it.
+
+    Returns None if the directory or its artefacts are missing — callers
+    fall back to the aggregate-CSV path in that case.
+    """
+    rf_dir = Path(rf_dir)
+    npz_path = rf_dir / "test_predictions.npz"
+    json_path = rf_dir / "test_metrics.json"
+    if not (npz_path.is_file() and json_path.is_file()):
+        return None
+    payload = json.loads(json_path.read_text())
+    preds = np.load(npz_path)
+    threshold = float(payload.get("threshold", DEFAULT_THRESHOLD))
+    return {
+        "run_name": rf_dir.name,
+        "metrics": dict(payload["metrics"]),
+        "threshold": threshold,
         "y_true": preds["y_true"],
         "y_prob": preds["y_prob"],
         "y_pred": preds["y_pred"],
@@ -215,6 +242,61 @@ def metrics_for_run(run: Dict[str, Any]) -> Dict[str, float]:
 # ──────────────────────────────────────────────────────────────────────────────
 
 
+def ensemble_run(
+    runs: List[Dict[str, Any]],
+    *,
+    mode: str = "arithmetic",
+    display_name: str = "ensemble",
+    threshold: float = DEFAULT_THRESHOLD,
+) -> Optional[Dict[str, Any]]:
+    """Build a synthetic "run" whose predictions are the arithmetic or
+    geometric mean of the inputs' per-row probabilities.
+
+    Returns None when fewer than two runs are supplied (an ensemble of one
+    is just that run). All inputs must share the same ``y_true`` — we
+    enforce that with an explicit check because mismatched test splits
+    produce silent nonsense otherwise.
+    """
+    if len(runs) < 2:
+        return None
+    y_true = runs[0]["y_true"]
+    for r in runs[1:]:
+        if r["y_true"].shape != y_true.shape or not np.array_equal(
+            r["y_true"], y_true
+        ):
+            raise ValueError(
+                f"Ensemble inputs disagree on y_true "
+                f"({runs[0]['run_name']} vs {r['run_name']}) — refusing to average."
+            )
+
+    probs = np.stack([r["y_prob"].astype(np.float64) for r in runs], axis=0)
+    if mode == "arithmetic":
+        y_prob = probs.mean(axis=0)
+    elif mode == "geometric":
+        eps = 1e-7
+        p = np.clip(probs, eps, 1.0 - eps)
+        mean_logit = np.log(p / (1.0 - p)).mean(axis=0)
+        y_prob = 1.0 / (1.0 + np.exp(-mean_logit))
+    else:
+        raise ValueError(f"mode must be 'arithmetic' or 'geometric', got {mode!r}")
+
+    y_pred = (y_prob >= threshold).astype(int)
+    # Reuse train.py's metric bundle so the ensemble row has the same
+    # metric set as every other row in the table.
+    from train import compute_classification_metrics  # late import ok
+    metrics = compute_classification_metrics(y_true, y_prob, threshold=threshold)
+
+    return {
+        "run_name": display_name,
+        "metrics": metrics,
+        "threshold": threshold,
+        "y_true": y_true,
+        "y_prob": y_prob,
+        "y_pred": y_pred,
+        "component_runs": [r["run_name"] for r in runs],
+    }
+
+
 def aggregate_runs(runs: List[Dict[str, Any]]) -> Dict[str, Any]:
     """
     Aggregate multiple single-seed runs into one ``mean ± std`` row.
@@ -262,13 +344,31 @@ def build_comparison_table(
     transformer_from_scratch: Optional[Dict[str, Any]],
     transformer_mtlm: Optional[Dict[str, Any]],
     rf: Dict[str, Dict[str, float]],
+    *,
+    ensemble: Optional[Dict[str, Any]] = None,
+    rf_full: Optional[Dict[str, Any]] = None,
 ) -> pd.DataFrame:
-    """
-    Build the report-ready comparison table.
+    """Build the report-ready comparison table.
 
     Columns: ``model`` + every entry in :data:`REPORTED_METRICS`. Cells are
     ``mean ± std`` strings for aggregated transformer rows, plain numbers
-    elsewhere, and ``—`` where the metric isn't available (e.g. RF ECE).
+    elsewhere, and ``—`` where the metric isn't available.
+
+    Parameters
+    ----------
+    transformer_from_scratch, transformer_mtlm
+        Aggregated mean±std dicts from :func:`aggregate_runs`.
+    rf
+        Dict from :func:`load_rf_metrics` (from the aggregate CSV) — the
+        fallback when no full RF prediction artefact is available.
+    ensemble
+        Optional single "run"-shaped dict from :func:`ensemble_run`, added
+        as a row between the MTLM and the RF rows.
+    rf_full
+        Optional "run"-shaped RF dict from :func:`load_rf_from_predictions`.
+        When present, the RF-tuned row is computed from the raw probability
+        vector and every metric in :data:`REPORTED_METRICS` is populated —
+        ECE, Brier, kappa, specificity included.
     """
     rows: List[Dict[str, Any]] = []
 
@@ -293,14 +393,34 @@ def build_comparison_table(
             row[k] = _format_mean_std(mean[k], std[k], n)
         rows.append(row)
 
-    for display_name, label in (("rf_baseline", "RF (baseline)"),
-                                 ("rf_tuned", "RF (tuned)")):
-        if display_name not in rf:
-            continue
-        row = _blank_row(label)
+    if ensemble is not None:
+        ens_metrics = metrics_for_run(ensemble)
+        n_comp = len(ensemble.get("component_runs", []))
+        row = {"model": f"Transformer ensemble (arithmetic, n={n_comp})"}
+        for k in REPORTED_METRICS:
+            row[k] = f"{ens_metrics[k]:.4f}"
+        rows.append(row)
+
+    # RF baseline stays CSV-derived (no raw predictions for it on disk).
+    if "rf_baseline" in rf:
+        row = _blank_row("RF (baseline)")
         for k in _RF_METRIC_COLUMNS:
-            if k in rf[display_name]:
-                row[k] = f"{rf[display_name][k]:.4f}"
+            if k in rf["rf_baseline"]:
+                row[k] = f"{rf['rf_baseline'][k]:.4f}"
+        rows.append(row)
+
+    # RF tuned — prefer the full-prediction path when available.
+    if rf_full is not None:
+        rf_metrics = metrics_for_run(rf_full)
+        row = {"model": "RF (tuned)"}
+        for k in REPORTED_METRICS:
+            row[k] = f"{rf_metrics[k]:.4f}"
+        rows.append(row)
+    elif "rf_tuned" in rf:
+        row = _blank_row("RF (tuned)")
+        for k in _RF_METRIC_COLUMNS:
+            if k in rf["rf_tuned"]:
+                row[k] = f"{rf['rf_tuned'][k]:.4f}"
         rows.append(row)
 
     return pd.DataFrame(rows, columns=["model", *REPORTED_METRICS])
@@ -358,6 +478,19 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Path to the RF metrics CSV produced by random_forest.py.",
     )
     p.add_argument(
+        "--rf-predictions", type=Path, default=Path("results/rf"),
+        help="Directory containing rf test_predictions.npz / test_metrics.json "
+             "(from src/rf_predictions.py). When present, the RF tuned row is "
+             "computed from the raw probability vector rather than the CSV.",
+    )
+    p.add_argument(
+        "--ensemble-mode",
+        choices=("arithmetic", "geometric", "none"),
+        default="arithmetic",
+        help="Aggregate per-seed from-scratch runs into a synthetic ensemble "
+             "row. 'none' disables the extra row.",
+    )
+    p.add_argument(
         "--output-dir", type=Path, default=Path("results"),
         help="Directory to write comparison_table.csv / .md / evaluate_summary.json.",
     )
@@ -391,6 +524,14 @@ def main(argv: Optional[List[str]] = None) -> int:
     from_scratch_runs = _load_all_or_empty(args.from_scratch_runs)
     mtlm_runs = _load_all_or_empty(args.mtlm_runs)
     rf = load_rf_metrics(args.rf)
+    rf_full = load_rf_from_predictions(args.rf_predictions)
+    if rf_full is None:
+        logger.info(
+            "No raw RF predictions at %s — RF tuned row will use CSV "
+            "numbers and leave calibration cells blank. "
+            "Run `python src/rf_predictions.py` to populate them.",
+            args.rf_predictions,
+        )
 
     transformer_from_scratch = (
         aggregate_runs(from_scratch_runs) if from_scratch_runs else None
@@ -398,8 +539,16 @@ def main(argv: Optional[List[str]] = None) -> int:
     transformer_mtlm = (
         aggregate_runs(mtlm_runs) if mtlm_runs else None
     )
+    ensemble = (
+        None if args.ensemble_mode == "none"
+        else ensemble_run(from_scratch_runs, mode=args.ensemble_mode,
+                          display_name=f"ensemble_{args.ensemble_mode}")
+    )
 
-    table = build_comparison_table(transformer_from_scratch, transformer_mtlm, rf)
+    table = build_comparison_table(
+        transformer_from_scratch, transformer_mtlm, rf,
+        ensemble=ensemble, rf_full=rf_full,
+    )
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
     csv_path = args.output_dir / "comparison_table.csv"
@@ -414,6 +563,15 @@ def main(argv: Optional[List[str]] = None) -> int:
         "transformer_from_scratch": transformer_from_scratch,
         "transformer_mtlm": transformer_mtlm,
         "rf": rf,
+        "rf_full": (
+            {"metrics": metrics_for_run(rf_full), "threshold": rf_full["threshold"]}
+            if rf_full is not None else None
+        ),
+        "ensemble": (
+            {"metrics": metrics_for_run(ensemble), "mode": args.ensemble_mode,
+             "component_runs": ensemble.get("component_runs", [])}
+            if ensemble is not None else None
+        ),
     }
     # NumPy arrays from per_seed payloads get dropped — we only kept the
     # derived metrics dicts there. Raw arrays live in the *.npz files.

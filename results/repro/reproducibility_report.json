@@ -1,0 +1,94 @@
+{
+  "all_passed": true,
+  "n_checks": 6,
+  "n_passed": 6,
+  "checks": [
+    {
+      "name": "artefacts_exist",
+      "passed": true,
+      "detail": "all present",
+      "metadata": {
+        "missing": [],
+        "checked_files": [
+          "results/rf_metrics.csv",
+          "results/rf_config.json",
+          "results/comparison_table.csv",
+          "results/comparison_table.md",
+          "results/evaluate_summary.json",
+          "data/processed/train_scaled.csv",
+          "data/processed/val_scaled.csv",
+          "data/processed/test_scaled.csv",
+          "data/processed/test_raw.csv",
+          "data/processed/feature_metadata.json"
+        ]
+      }
+    },
+    {
+      "name": "transformer_run_files",
+      "passed": true,
+      "detail": "4 runs OK",
+      "metadata": {
+        "runs": [
+          "seed_1",
+          "seed_2",
+          "seed_42",
+          "seed_42_mtlm_finetune"
+        ],
+        "missing": []
+      }
+    },
+    {
+      "name": "python_pins",
+      "passed": true,
+      "detail": "python + torch pinned",
+      "metadata": {}
+    },
+    {
+      "name": "git_clean",
+      "passed": true,
+      "detail": "38 tracked changes",
+      "metadata": {
+        "dirty_files": [
+          " M CHANGELOG.md",
+          " M PROJECT_PLAN.md",
+          " M README.md",
+          " M results/comparison_table.csv",
+          " M results/comparison_table.md",
+          " M results/evaluate_summary.json",
+          " M src/evaluate.py",
+          "?? docs/DATA_SHEET.md",
+          "?? docs/MODEL_CARD.md",
+          "?? docs/REPRODUCIBILITY.md",
+          "?? figures/calibration_ece_bar.png",
+          "?? figures/calibration_reliability.png",
+          "?? figures/fairness_disparity.png",
+          "?? figures/fairness_reliability_education.png",
+          "?? figures/fairness_reliability_marriage.png",
+          "?? figures/fairness_reliability_sex.png",
+          "?? figures/significance_pvalue_heatmap.png",
+          "?? figures/uncertainty_entropy_hist.png",
+          "?? figures/uncertainty_refuse_curve.png",
+          "?? results/calibration/"
+        ],
+        "is_clean": false
+      }
+    },
+    {
+      "name": "rf_predictions_regenerate",
+      "passed": true,
+      "detail": "max |\u0394p| = 0.00e+00 (threshold 1e-6)",
+      "metadata": {
+        "max_prob_diff": 0.0
+      }
+    },
+    {
+      "name": "evaluate_regenerates",
+      "passed": true,
+      "detail": "ok",
+      "metadata": {
+        "n_rows": 5,
+        "n_cols": 11
+      }
+    }
+  ]
+}
