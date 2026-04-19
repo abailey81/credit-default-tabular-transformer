@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import sys
 from pathlib import Path
 
 import numpy as np
@@ -10,11 +9,8 @@ import pandas as pd
 import pytest
 
 REPO = Path(__file__).resolve().parent.parent
-SRC = REPO / "src"
-if str(SRC) not in sys.path:
-    sys.path.insert(0, str(SRC))
 
-import repro  # noqa: E402
+from src.infra import repro  # noqa: E402
 
 
 def test_compare_dataframes_identical_ok():

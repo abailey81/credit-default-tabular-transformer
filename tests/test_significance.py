@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import sys
 from pathlib import Path
 
 import numpy as np
@@ -10,11 +9,8 @@ import pandas as pd
 import pytest
 
 REPO = Path(__file__).resolve().parent.parent
-SRC = REPO / "src"
-if str(SRC) not in sys.path:
-    sys.path.insert(0, str(SRC))
 
-import significance as sig  # noqa: E402
+from src.evaluation import significance as sig  # noqa: E402
 from sklearn.metrics import roc_auc_score
 
 
@@ -133,7 +129,7 @@ def test_min_n_for_auc_difference_infinite_on_identical():
 def test_run_all_pairs_on_committed(tmp_path):
     seed_42 = REPO / "results" / "transformer" / "seed_42"
     seed_1 = REPO / "results" / "transformer" / "seed_1"
-    rf = REPO / "results" / "rf"
+    rf = REPO / "results" / "baseline" / "rf"
     if not all((seed_42 / "test_predictions.npz").is_file()
                for p in [seed_42, seed_1, rf]
                for _ in [p]) or not (rf / "test_predictions.npz").is_file():

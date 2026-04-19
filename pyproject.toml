@@ -30,9 +30,6 @@ mypy = "^1.5"
 pre-commit = "^3.4"
 jupyter = "^1.1.1"
 
-[tool.poetry.scripts]
-run-pipeline = "run_pipeline:main"
-
 [build-system]
 requires = ["poetry-core"]
 build-backend = "poetry.core.masonry.api"

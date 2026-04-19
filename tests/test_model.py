@@ -9,14 +9,14 @@ from pathlib import Path
 import pytest
 import torch
 
-from embedding import TOKEN_ORDER  # noqa: E402
-from model import (  # noqa: E402
+from src.models.model import (  # noqa: E402
     FULL_SEQ_LEN,
     PAY_0_FEATURE_POSITION_23,
     PAY_0_OUTPUT_POSITION_24,
     TabularTransformer,
 )
-from tokenizer import PAY_RAW_NUM_CLASSES  # noqa: E402
+from src.tokenization.embedding import TOKEN_ORDER  # noqa: E402
+from src.tokenization.tokenizer import PAY_RAW_NUM_CLASSES  # noqa: E402
 
 
 @pytest.fixture()
@@ -271,7 +271,7 @@ def test_load_pretrained_encoder_applies_matching_keys_and_skips_classifier(mixe
     pre_encoder_lin = pretrained.encoder.blocks[0].attention.W_Q.weight.clone()
 
     with tempfile.TemporaryDirectory() as tmp:
-        from utils import build_checkpoint_metadata, save_checkpoint
+        from src.training.utils import build_checkpoint_metadata, save_checkpoint
         ckpt = Path(tmp) / "pretrained.pt"
         save_checkpoint(
             ckpt, pretrained,

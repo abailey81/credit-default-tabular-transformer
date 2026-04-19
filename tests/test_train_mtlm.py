@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import sys
 from argparse import Namespace
 from pathlib import Path
 from typing import Any, Dict
@@ -12,14 +11,11 @@ import pytest
 import torch
 
 REPO = Path(__file__).resolve().parent.parent
-SRC = REPO / "src"
-if str(SRC) not in sys.path:
-    sys.path.insert(0, str(SRC))
 
-from model import TabularTransformer  # noqa: E402
-from mtlm import MTLMModel  # noqa: E402
+from src.models.model import TabularTransformer  # noqa: E402
+from src.models.mtlm import MTLMModel  # noqa: E402
 
-import train_mtlm as train_mtlm_mod  # noqa: E402
+from src.training import train_mtlm as train_mtlm_mod  # noqa: E402
 
 
 def _default_args_namespace(**overrides: Any) -> Namespace:
@@ -31,7 +27,7 @@ def _default_args_namespace(**overrides: Any) -> Namespace:
 
 
 def _cat_vocab_sizes() -> Dict[str, int]:
-    from embedding import CAT_VOCAB_SIZES
+    from src.tokenization.embedding import CAT_VOCAB_SIZES
 
     return dict(CAT_VOCAB_SIZES)
 

@@ -9,7 +9,6 @@ fresh clone.
 from __future__ import annotations
 
 import json
-import sys
 from pathlib import Path
 from typing import Any, Dict
 
@@ -17,11 +16,8 @@ import numpy as np
 import pytest
 
 REPO = Path(__file__).resolve().parent.parent
-SRC = REPO / "src"
-if str(SRC) not in sys.path:
-    sys.path.insert(0, str(SRC))
 
-import interpret as interp  # noqa: E402
+from src.evaluation import interpret as interp  # noqa: E402
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -211,7 +207,7 @@ def test_main_end_to_end(tmp_path: Path):
 
     rc = interp.main([
         "--run-dir", str(seed_42),
-        "--rf-importance", str(REPO / "results" / "rf_feature_importance.csv"),
+        "--rf-importance", str(REPO / "results" / "baseline" / "rf_feature_importance.csv"),
         "--figures-dir", str(tmp_path / "figures"),
         "--output-json", str(tmp_path / "interpret.json"),
     ])

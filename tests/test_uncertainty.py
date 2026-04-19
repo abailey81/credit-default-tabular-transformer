@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import sys
 from pathlib import Path
 
 import numpy as np
@@ -12,11 +11,8 @@ import torch
 import torch.nn as nn
 
 REPO = Path(__file__).resolve().parent.parent
-SRC = REPO / "src"
-if str(SRC) not in sys.path:
-    sys.path.insert(0, str(SRC))
 
-import uncertainty as un  # noqa: E402
+from src.evaluation import uncertainty as un  # noqa: E402
 
 
 def test_enable_dropout_flips_only_dropout_modules():

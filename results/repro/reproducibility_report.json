@@ -10,11 +10,11 @@
       "metadata": {
         "missing": [],
         "checked_files": [
-          "results/rf_metrics.csv",
-          "results/rf_config.json",
-          "results/comparison_table.csv",
-          "results/comparison_table.md",
-          "results/evaluate_summary.json",
+          "results/baseline/rf_metrics.csv",
+          "results/baseline/rf_config.json",
+          "results/evaluation/comparison/comparison_table.csv",
+          "results/evaluation/comparison/comparison_table.md",
+          "results/evaluation/comparison/evaluate_summary.json",
           "data/processed/train_scaled.csv",
           "data/processed/val_scaled.csv",
           "data/processed/test_scaled.csv",
@@ -55,16 +55,29 @@
     {
       "name": "git_clean",
       "passed": true,
-      "detail": "7 tracked changes",
+      "detail": "114 tracked changes",
       "metadata": {
         "dirty_files": [
-          " M figures/interpret/attention_per_head.png",
-          " M figures/interpret/attention_rollout.png",
-          " M figures/interpret/cls_feature_importance.png",
-          " M figures/interpret/defaulter_vs_nondefaulter_attention.png",
-          " M figures/interpret/feature_importance_comparison.png",
-          " M results/interpret.json",
-          " M src/interpret.py"
+          "R  figures/rf_confusion_matrix.png -> figures/baseline/rf_confusion_matrix.png",
+          "R  figures/rf_feature_importance.png -> figures/baseline/rf_feature_importance.png",
+          "R  figures/rf_roc_pr_curves.png -> figures/baseline/rf_roc_pr_curves.png",
+          "R  figures/rf_threshold_analysis.png -> figures/baseline/rf_threshold_analysis.png",
+          "R  figures/rf_tuning_analysis.png -> figures/baseline/rf_tuning_analysis.png",
+          "R  figures/fig01_class_distribution.png -> figures/eda/fig01_class_distribution.png",
+          "R  figures/fig02_categorical_by_target.png -> figures/eda/fig02_categorical_by_target.png",
+          "R  figures/fig03_numerical_distributions.png -> figures/eda/fig03_numerical_distributions.png",
+          "R  figures/fig04_pay_status_analysis.png -> figures/eda/fig04_pay_status_analysis.png",
+          "R  figures/fig05_temporal_trajectories.png -> figures/eda/fig05_temporal_trajectories.png",
+          "R  figures/fig06_utilisation_analysis.png -> figures/eda/fig06_utilisation_analysis.png",
+          "R  figures/fig07_correlation_heatmap.png -> figures/eda/fig07_correlation_heatmap.png",
+          "R  figures/fig08_feature_target_association.png -> figures/eda/fig08_feature_target_association.png",
+          "R  figures/fig09_bill_amt_autocorrelation.png -> figures/eda/fig09_bill_amt_autocorrelation.png",
+          "R  figures/fig10_feature_interactions.png -> figures/eda/fig10_feature_interactions.png",
+          "R  figures/fig11_pay_transitions.png -> figures/eda/fig11_pay_transitions.png",
+          "R  figures/fig13_repayment_ratio.png -> figures/eda/fig13_repayment_ratio.png",
+          "R  figures/calibration_ece_bar.png -> figures/evaluation/calibration/calibration_ece_bar.png",
+          "R  figures/calibration_reliability.png -> figures/evaluation/calibration/calibration_reliability.png",
+          "R  figures/confusion_matrices_transformer.png -> figures/evaluation/comparison/confusion_matrices_transformer.png"
         ],
         "is_clean": false
       }

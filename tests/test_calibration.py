@@ -3,18 +3,14 @@
 from __future__ import annotations
 
 import json
-import sys
 from pathlib import Path
 
 import numpy as np
 import pytest
 
 REPO = Path(__file__).resolve().parent.parent
-SRC = REPO / "src"
-if str(SRC) not in sys.path:
-    sys.path.insert(0, str(SRC))
 
-import calibration as cal  # noqa: E402
+from src.evaluation import calibration as cal  # noqa: E402
 
 
 @pytest.fixture

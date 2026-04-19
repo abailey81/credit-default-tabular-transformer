@@ -34,7 +34,28 @@ Contributors (alphabetical by GitHub handle):
 
 ---
 
-## [Unreleased] — `feature/phase-11-12-14`
+## [Unreleased] — `feature/restructure-and-polish`
+
+Repository restructure: the flat `src/` layout is reorganised into
+professional subpackages (`src/data`, `src/analysis`, `src/tokenization`,
+`src/models`, `src/training`, `src/baselines`, `src/evaluation`,
+`src/infra`). `figures/` now groups by section (`eda/`, `baseline/`,
+`evaluation/{comparison,calibration,fairness,uncertainty,significance,interpret}/`)
+and `results/` mirrors the same taxonomy (`analysis/`, `baseline/`,
+`evaluation/...`). `run_pipeline.py` moved to `scripts/`.
+
+All imports rewritten to use relative/absolute subpackage paths
+(`from src.models.model import ...`); all CLI defaults updated to the
+new output directories; `src/infra/repro.py` invokes regeneration via
+`python -m` module paths. `python -m src.infra.repro` still shows
+**7/7 PASS** (including `rf_predictions_regenerate` max |Δp| = 0) and
+the **316-test pytest suite** is unchanged. No function names, class
+names, argparse flags, or artefact contents were modified — the change
+is strictly a layout + imports + path-defaults pass.
+
+---
+
+## [0.14.0] — `feature/phase-11-12-14`
 
 Phase 11 (calibration), 11A (fairness, N10), 11B (uncertainty, N11), 12
 (significance), 14A (reproducibility), 14B (Model Card + Data Sheet,

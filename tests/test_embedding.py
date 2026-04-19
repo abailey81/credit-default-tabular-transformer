@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 import torch
 
-from embedding import (  # noqa: E402
+from src.tokenization.embedding import (  # noqa: E402
     CAT_VOCAB_SIZES,
     N_MONTHS,
     TOKEN_ORDER,
@@ -265,7 +265,7 @@ def test_cat_vocab_sizes_missing_feature_raises():
 
 
 def test_load_cat_vocab_sizes_lazy_and_matches_defaults():
-    from embedding import load_cat_vocab_sizes
+    from src.tokenization.embedding import load_cat_vocab_sizes
     loaded = load_cat_vocab_sizes()
     assert loaded == CAT_VOCAB_SIZES
     assert loaded["SEX"] == 2
@@ -276,7 +276,7 @@ def test_load_cat_vocab_sizes_lazy_and_matches_defaults():
 def test_build_temporal_layout_matches_canonical_token_order():
     # drift guard: a TOKEN_ORDER reorder without touching the layout helper
     # would silently mis-target TemporalDecayBias downstream
-    from embedding import build_temporal_layout
+    from src.tokenization.embedding import build_temporal_layout
     layout = build_temporal_layout()
     assert layout == {
         "pay":     {"positions": [4, 5, 6, 7, 8, 9],         "months": [0, 1, 2, 3, 4, 5]},
@@ -286,7 +286,7 @@ def test_build_temporal_layout_matches_canonical_token_order():
 
 
 def test_build_temporal_layout_respects_cls_offset_zero():
-    from embedding import build_temporal_layout
+    from src.tokenization.embedding import build_temporal_layout
     layout = build_temporal_layout(cls_offset=0)
     assert layout["pay"]["positions"] == [3, 4, 5, 6, 7, 8]
     assert layout["bill"]["positions"] == [11, 12, 13, 14, 15, 16]

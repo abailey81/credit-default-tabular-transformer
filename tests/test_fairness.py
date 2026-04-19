@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import sys
 from pathlib import Path
 
 import numpy as np
@@ -11,11 +10,8 @@ import pandas as pd
 import pytest
 
 REPO = Path(__file__).resolve().parent.parent
-SRC = REPO / "src"
-if str(SRC) not in sys.path:
-    sys.path.insert(0, str(SRC))
 
-import fairness as fa  # noqa: E402
+from src.evaluation import fairness as fa  # noqa: E402
 
 
 @pytest.fixture
@@ -85,7 +81,7 @@ def test_main_end_to_end(tmp_path):
         pytest.skip("no committed transformer runs or preprocessing")
     rc = fa.main([
         "--runs", str(seed_42),
-        "--rf-dir", str(REPO / "results" / "rf"),
+        "--rf-dir", str(REPO / "results" / "baseline" / "rf"),
         "--test-raw", str(test_raw),
         "--output-dir", str(tmp_path / "out"),
         "--figures-dir", str(tmp_path / "fig"),

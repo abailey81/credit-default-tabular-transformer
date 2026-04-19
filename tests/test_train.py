@@ -4,7 +4,6 @@ construction, e2e smoke."""
 from __future__ import annotations
 
 import json
-import sys
 from argparse import Namespace
 from pathlib import Path
 from typing import Any, Dict
@@ -16,14 +15,11 @@ import torch.nn as nn
 from torch.optim import AdamW
 
 REPO = Path(__file__).resolve().parent.parent
-SRC = REPO / "src"
-if str(SRC) not in sys.path:
-    sys.path.insert(0, str(SRC))
 
-from losses import FocalLoss, LabelSmoothingBCELoss, WeightedBCELoss  # noqa: E402
-from model import TabularTransformer  # noqa: E402
+from src.models.model import TabularTransformer  # noqa: E402
+from src.training.losses import FocalLoss, LabelSmoothingBCELoss, WeightedBCELoss  # noqa: E402
 
-import train as train_mod  # noqa: E402
+from src.training import train as train_mod  # noqa: E402
 
 
 def test_cosine_warmup_schedule_starts_at_zero_and_peaks():

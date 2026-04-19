@@ -6,7 +6,7 @@ import pytest
 import torch
 import torch.nn.functional as F
 
-from losses import (  # noqa: E402
+from src.training.losses import (  # noqa: E402
     FocalLoss,
     LabelSmoothingBCELoss,
     WeightedBCELoss,

@@ -752,7 +752,7 @@ All configurable via constructor for ablations.
 #### Verification
 
 ```
-python src/transformer.py
+python -m src.models.transformer
 ```
 
 Smoke test checks:
@@ -1100,8 +1100,8 @@ with $\lambda \in \{0.1, 0.3, 0.5\}$ ablated.
 `src/random_forest.py` is 870 LOC covering baseline RF, 60-iter
 `RandomizedSearchCV`, dual feature importance (Gini MDI + permutation),
 5-fold stratified CV, threshold optimisation, and five publication figures.
-Running `poetry run python run_pipeline.py --rf-benchmark --source local`
-produces `results/rf_*.{csv,json}` and `figures/rf_*.png`. Hyperparameter
+Running `poetry run python scripts/run_pipeline.py --rf-benchmark --source local`
+produces `results/baseline/rf_*.{csv,json}` and `figures/baseline/rf_*.png`. Hyperparameter
 grid is a deliberate subset of §9.3 (n_iter=60 vs 200) for time-budget
 reasons; the subset is defensible and can be widened for the final runs.
 
@@ -1878,7 +1878,7 @@ Marking criteria include "writing quality" and "presentation" (25% combined). Cl
 
 ## 16.5 Phase 14A: Reproducibility Guarantees
 
-**Status: [DONE] — `src/repro.py` + `tests/test_repro.py` + `docs/REPRODUCIBILITY.md` + `data/processed/SPLIT_HASHES.md`. Seven checks: artefact presence, transformer-run-file integrity, split-hash SHA-256 (§16.5.3), python/torch pins, git-clean, RF-prediction bit-parity (max |Δp| = 0), `evaluate.py` bit-parity. `python src/repro.py` exits 0 when everything matches. §16.5.4 Dockerfile deferred.**
+**Status: [DONE] — `src/infra/repro.py` + `tests/test_repro.py` + `docs/REPRODUCIBILITY.md` + `data/processed/SPLIT_HASHES.md`. Seven checks: artefact presence, transformer-run-file integrity, split-hash SHA-256 (§16.5.3), python/torch pins, git-clean, RF-prediction bit-parity (max |Δp| = 0), `src.evaluation.evaluate` bit-parity. `python -m src.infra.repro` exits 0 when everything matches. §16.5.4 Dockerfile deferred.**
 
 "Code runs on my machine" is not a guarantee. We commit to stronger guarantees that any marker can verify in a clean environment.
 

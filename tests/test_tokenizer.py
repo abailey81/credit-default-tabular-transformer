@@ -7,7 +7,7 @@ import pandas as pd
 import pytest
 import torch
 
-from tokenizer import (  # noqa: E402
+from src.tokenization.tokenizer import (  # noqa: E402
     CATEGORICAL_FEATURES,
     MAX_PAY_DELAY,
     NUMERICAL_FEATURES,
@@ -203,7 +203,7 @@ def test_pay_raw_consistent_with_hybrid_state_severity(train_df_small, cat_vocab
 
 
 def test_pay_raw_flows_through_default_collate(small_dataset):
-    from dataset import default_collate
+    from src.training.dataset import default_collate
 
     batch = default_collate([small_dataset[i] for i in range(8)])
     assert "pay_raw" in batch

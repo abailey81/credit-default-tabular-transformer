@@ -6,14 +6,14 @@ from __future__ import annotations
 import pytest
 import torch
 
-from embedding import N_FEATURE_GROUPS, build_group_assignment  # noqa: E402
-from transformer import (  # noqa: E402
+from src.models.transformer import (  # noqa: E402
     FeatureGroupBias,
     FeedForward,
     TemporalDecayBias,
     TransformerBlock,
     TransformerEncoder,
 )
+from src.tokenization.embedding import N_FEATURE_GROUPS, build_group_assignment  # noqa: E402
 
 
 def test_feedforward_output_shape():
@@ -311,7 +311,7 @@ def test_encoder_no_temporal_decay_returns_none_bias(canonical_layout):
 
 
 def test_encoder_integrates_with_feature_embedding(canonical_layout):
-    from embedding import FeatureEmbedding
+    from src.tokenization.embedding import FeatureEmbedding
 
     torch.manual_seed(0)
     d_model = 32

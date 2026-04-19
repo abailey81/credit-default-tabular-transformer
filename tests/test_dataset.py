@@ -6,12 +6,12 @@ import numpy as np
 import pytest
 import torch
 
-from dataset import (  # noqa: E402
+from src.tokenization.tokenizer import MTLMCollator
+from src.training.dataset import (  # noqa: E402
     StratifiedBatchSampler,
     default_collate,
     make_loader,
 )
-from tokenizer import MTLMCollator
 
 
 def _labels(n_pos: int, n_neg: int) -> torch.Tensor:

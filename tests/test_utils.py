@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 import torch
 
-from utils import (  # noqa: E402
+from src.training.utils import (  # noqa: E402
     EarlyStopping,
     Timer,
     build_checkpoint_metadata,

@@ -7,7 +7,7 @@ import math
 import pytest
 import torch
 
-from attention import MultiHeadAttention, ScaledDotProductAttention  # noqa: E402
+from src.models.attention import MultiHeadAttention, ScaledDotProductAttention  # noqa: E402
 
 
 def test_sdpa_output_shape():

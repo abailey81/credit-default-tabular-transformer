@@ -7,16 +7,16 @@ from typing import Any, Dict
 import pytest
 import torch
 
-from embedding import FeatureEmbedding, N_FEATURE_GROUPS, build_group_assignment, build_temporal_layout  # noqa: E402
-from model import TabularTransformer  # noqa: E402
-from mtlm import MTLMHead, MTLMLossComponents, MTLMModel, mtlm_loss  # noqa: E402
-from tokenizer import (  # noqa: E402
+from src.models.model import TabularTransformer  # noqa: E402
+from src.models.mtlm import MTLMHead, MTLMLossComponents, MTLMModel, mtlm_loss  # noqa: E402
+from src.models.transformer import FeatureGroupBias, TemporalDecayBias, TransformerEncoder  # noqa: E402
+from src.tokenization.embedding import FeatureEmbedding, N_FEATURE_GROUPS, build_group_assignment, build_temporal_layout  # noqa: E402
+from src.tokenization.tokenizer import (  # noqa: E402
     CATEGORICAL_FEATURES,
     NUMERICAL_FEATURES,
     PAY_RAW_NUM_CLASSES,
     PAY_STATUS_FEATURES,
 )
-from transformer import FeatureGroupBias, TemporalDecayBias, TransformerEncoder  # noqa: E402
 
 
 @pytest.fixture()

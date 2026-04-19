@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-import sys
 from pathlib import Path
 
 import numpy as np
@@ -11,11 +10,8 @@ import pandas as pd
 import pytest
 
 REPO = Path(__file__).resolve().parent.parent
-SRC = REPO / "src"
-if str(SRC) not in sys.path:
-    sys.path.insert(0, str(SRC))
 
-import evaluate as ev  # noqa: E402
+from src.evaluation import evaluate as ev  # noqa: E402
 
 
 @pytest.fixture
@@ -105,7 +101,7 @@ def test_aggregate_runs_warns_and_propagates_on_nan(synthetic_runs, caplog):
 
 
 def test_load_rf_from_predictions_loads_committed_rf():
-    rf = REPO / "results" / "rf"
+    rf = REPO / "results" / "baseline" / "rf"
     if not (rf / "test_predictions.npz").is_file():
         pytest.skip("no rf prediction artefact")
     out = ev.load_rf_from_predictions(rf)
