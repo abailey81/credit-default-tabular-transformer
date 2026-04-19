@@ -26,13 +26,13 @@ benchmarks on UCI.
 
 No missing values at the UCI API level. Some categoricals carry
 undocumented codes (0/5/6 in `EDUCATION`, 0 in `MARRIAGE`);
-`src/data_preprocessing.py` folds them into "Other". No direct
+`src.data.preprocessing` folds them into "Other". No direct
 identifiers — `AGE`, `SEX`, `EDUCATION`, `MARRIAGE`, `LIMIT_BAL` could
 in principle be linked against an external table for re-ID, but no such
 table exists in practice. `SEX`, `EDUCATION`, `MARRIAGE` are quasi-
 protected under the UK Equality Act and analogues; subgroup performance
-is audited in `src/fairness.py` (Phase 11A). 70/15/15 split, stratified
-on `DEFAULT`, fixed random state.
+is audited in `src.evaluation.fairness` (Phase 11A). 70/15/15 split,
+stratified on `DEFAULT`, fixed random state.
 
 ## Collection process
 
@@ -44,7 +44,7 @@ from 2012).
 
 ## Preprocessing, cleaning, labelling
 
-`src/data_preprocessing.py` and `src/data_sources.py`:
+`src.data.preprocessing` and `src.data.sources`:
 
 - `EDUCATION` {0, 5, 6} → 4 ("Other").
 - `MARRIAGE` {0} → 3 ("Other").
@@ -72,7 +72,9 @@ threshold-based decision.
 ## Distribution
 
 Source: UCI ML Repository dataset 350. License: CC BY 4.0. Raw `.xls`
-tracked under `data/raw/` per UCI redistribution policy.
+tracked under `data/raw/` per UCI redistribution policy. The pipeline
+that consumes this file lives under `src/data/` — see
+`docs/ARCHITECTURE.md` for the full folder layout.
 
 ## Maintenance
 

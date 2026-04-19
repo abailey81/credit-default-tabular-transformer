@@ -2,8 +2,16 @@
 
 SHA-256 of every committed pre-processed split. Reviewers hash the files
 on their disk and compare here to confirm they have the same bytes we
-trained and evaluated on. `src/repro.py`'s `split_hashes_match` check
+trained and evaluated on. `src/infra/repro.py`'s `split_hashes_match` check
 fails if anything drifts.
+
+## Layout
+
+The nine split CSVs live under `data/processed/splits/`; `feature_metadata.json`
+sits at `data/processed/` root. `check_split_hashes_match` probes both
+locations so the ledger below keys on bare filenames — this row format
+(`` | `filename` | `sha256` | ``) is parsed by a regex in `repro.py`, do
+not change it.
 
 ## SHA-256
 
@@ -23,17 +31,17 @@ fails if anything drifts.
 ## Verification
 
 ```bash
-python src/repro.py
+python -m src.infra.repro
 # Look for [PASS] split_hashes_match.
 ```
 
 Or manually:
 
 ```bash
-sha256sum data/processed/*.csv data/processed/feature_metadata.json
+sha256sum data/processed/splits/*.csv data/processed/feature_metadata.json
 ```
 
 A mismatch means the split was regenerated under different
-`data_preprocessing.py` behaviour, a different raw-data fetch, or the
+`src/data/preprocessing.py` behaviour, a different raw-data fetch, or the
 file was edited locally. In all three cases the published metrics are
-not directly comparable; regenerate from `run_pipeline.py --preprocess-only`.
+not directly comparable; regenerate from `scripts/run_pipeline.py --preprocess-only`.

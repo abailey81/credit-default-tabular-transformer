@@ -25,13 +25,12 @@ torch = ">=2.2,<2.3"
 pytest = "^7.4"
 pytest-cov = "^4.1"
 ruff = "^0.1"
-black = "^23.0"
+black = "^24.0"
+isort = "^5.13"
+flake8 = "^7.0"
 mypy = "^1.5"
 pre-commit = "^3.4"
 jupyter = "^1.1.1"
-
-[tool.poetry.scripts]
-run-pipeline = "run_pipeline:main"
 
 [build-system]
 requires = ["poetry-core"]
@@ -46,7 +45,33 @@ select = ["E", "F", "I", "N", "W", "UP"]
 
 [tool.black]
 line-length = 100
-target-version = ["py310"]
+target-version = ["py310", "py311", "py312"]
+include = '\.pyi?$'
+extend-exclude = '''
+(
+  | /\.venv/
+  | /data/
+  | /results/
+  | /figures/
+  | /notebooks/
+)
+'''
+
+[tool.isort]
+profile = "black"
+line_length = 100
+src_paths = ["src", "tests", "scripts"]
+known_first_party = ["src"]
+skip = ["notebooks", "data", "results", "figures"]
+
+[tool.flake8]
+max-line-length = 100
+extend-ignore = ["E203", "E501", "W503"]
+exclude = [".venv", "data", "results", "figures", "notebooks", "__pycache__"]
+per-file-ignores = [
+    "__init__.py:F401",
+    "tests/*.py:F401,E402",
+]
 
 [tool.mypy]
 python_version = "3.10"

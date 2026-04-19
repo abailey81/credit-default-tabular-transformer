@@ -22,7 +22,7 @@ This is a research / coursework repository, not a deployed service. The attack s
 
 **Headline findings (what the marker will care about):**
 
-1. **[Critical] `torch.load(..., weights_only=False)` in `src/utils.py:281`** — arbitrary-code-execution vector on any untrusted checkpoint. Compounded by the fact that the pinned `torch==2.2.2` (per `pyproject.toml`) is subject to `PYSEC-2025-41` which demonstrates that **even `weights_only=True` is unsafe on <2.6.0**. This is the single most important fix.
+1. **[Critical] `torch.load(..., weights_only=False)` in `src/training/utils.py:281`** — arbitrary-code-execution vector on any untrusted checkpoint. Compounded by the fact that the pinned `torch==2.2.2` (per `pyproject.toml`) is subject to `PYSEC-2025-41` which demonstrates that **even `weights_only=True` is unsafe on <2.6.0**. This is the single most important fix.
 2. **[High] `torch 2.2.2` carries 5 CVEs** (2 RCE, 2 DoS, 1 deserialisation-RCE-disputed). Upgrade to `torch >= 2.8.0`.
 3. **[High] Hardcoded absolute user path baked into notebook output** (`/Users/a_bailey8/Downloads/…`) leaks the author's environment and will break the marker's re-run.
 4. **[High] No HTTP timeout / response-size cap on the UCI fetch path** — the third-party `ucimlrepo` calls `urllib.request.urlopen` without a `timeout=`, so a slow-loris or zip-bomb server can hang or OOM the process indefinitely.
@@ -36,11 +36,11 @@ No secrets, credentials, private keys, API tokens, `pickle`/`yaml.load`/`eval`/`
 
 | ID | Title | File | Severity |
 |---|---|---|---|
-| C-1 | `torch.load(weights_only=False)` on a pinned-vulnerable torch version | `src/utils.py:281` | Critical |
+| C-1 | `torch.load(weights_only=False)` on a pinned-vulnerable torch version | `src/training/utils.py:281` | Critical |
 
 ### C-1. `torch.load(weights_only=False)` is an RCE sink and torch is vulnerable even with `weights_only=True`
 
-**File:** `src/utils.py:281`
+**File:** `src/training/utils.py:281`
 **Code (verbatim):**
 
 ```python
@@ -94,9 +94,9 @@ Callers that need optimizer state must pass `trust_source=True` explicitly; exte
 | ID | Title | File | Severity |
 |---|---|---|---|
 | H-1 | `torch 2.2.2` has 5 known CVEs | `pyproject.toml:14` | High |
-| H-2 | No HTTP timeout / response-size cap on UCI fetch | `src/data_sources.py:212` (delegates to ucimlrepo) | High |
+| H-2 | No HTTP timeout / response-size cap on UCI fetch | `src/data/sources.py:212` (delegates to ucimlrepo) | High |
 | H-3 | Hardcoded user path `/Users/a_bailey8/Downloads/…` embedded in notebook output | `notebooks/02_data_preprocessing.ipynb:53` | High |
-| H-4 | Pipeline swallows *all* exceptions from data sources | `src/data_sources.py:361` | High |
+| H-4 | Pipeline swallows *all* exceptions from data sources | `src/data/sources.py:361` | High |
 
 ### H-1. `torch 2.2.2` — five CVEs spanning RCE and DoS
 
@@ -111,7 +111,7 @@ torch  2.2.2  CVE-2025-3730    fix: 2.8.0    DoS in torch.nn.functional.ctc_loss
 torch  2.2.2  (duplicate)      fix: 2.6.0    RCE via torch.load even with weights_only=True
 ```
 
-**Impact.** `PYSEC-2025-41` is directly relevant because the project calls `torch.load` (`src/utils.py:281`). The RCE can be triggered by a malicious checkpoint file. The DoS CVEs are lower-impact because the attacker would already need local invocation, but the project is published on GitHub for a marker to clone-and-run.
+**Impact.** `PYSEC-2025-41` is directly relevant because the project calls `torch.load` (`src/training/utils.py:281`). The RCE can be triggered by a malicious checkpoint file. The DoS CVEs are lower-impact because the attacker would already need local invocation, but the project is published on GitHub for a marker to clone-and-run.
 
 **Fix.** In `pyproject.toml`:
 
@@ -128,13 +128,13 @@ Then `poetry lock --no-update` and commit the lockfile. Verify with `pip-audit` 
 ### H-2. `ucimlrepo.fetch_ucirepo` calls `urllib.request.urlopen` with **no timeout and no response-size cap**
 
 **Files:**
-`src/data_sources.py:212` — call-site `dataset = fetch_ucirepo(id=self.dataset_id)`.
+`src/data/sources.py:212` — call-site `dataset = fetch_ucirepo(id=self.dataset_id)`.
 `.venv/lib/python3.12/site-packages/ucimlrepo/fetch.py:68` — upstream `urllib.request.urlopen(api_url, context=ssl.create_default_context(cafile=certifi.where()))`.
 `.venv/lib/python3.12/site-packages/ucimlrepo/fetch.py:97` — `df = pd.read_csv(data_url)` where `data_url` is taken verbatim from the API JSON response.
 
 **Impact.** Three compounding issues:
 
-1. **No timeout.** `urlopen(...)` defaults to `socket._GLOBAL_DEFAULT_TIMEOUT` which on most systems is `None` (blocks forever). A slow-loris attacker controlling DNS / the route to `archive.ics.uci.edu`, or a flaky CI runner, can hang `run_pipeline.py` until the CI job is killed.
+1. **No timeout.** `urlopen(...)` defaults to `socket._GLOBAL_DEFAULT_TIMEOUT` which on most systems is `None` (blocks forever). A slow-loris attacker controlling DNS / the route to `archive.ics.uci.edu`, or a flaky CI runner, can hang `scripts/run_pipeline.py` until the CI job is killed.
 2. **No response-size cap.** `pd.read_csv(data_url)` streams until EOF. A zip-bombed or gigantic CSV response would fill memory.
 3. **Partial SSRF.** The `data_url` that `pd.read_csv` fetches comes from the UCI metadata JSON response — if UCI were compromised (or on-path attacker injected), the client would follow it wherever it points (including `file://` on some pandas versions, or an internal IP). This is an upstream `ucimlrepo` issue; the project inherits it.
 
@@ -143,7 +143,7 @@ TLS *is* verified (good — `ssl.create_default_context(cafile=certifi.where())`
 **Fix.** Wrap the call in a per-attempt watchdog:
 
 ```python
-# src/data_sources.py — inside UCIRepoSource.load()
+# src/data/sources.py — inside UCIRepoSource.load()
 import concurrent.futures
 
 with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
@@ -188,7 +188,7 @@ nbstripout --install --attributes .gitattributes
 
 ### H-4. `ChainedDataSource` swallows *any* exception from a child source and continues to fallback
 
-**File:** `src/data_sources.py:361`
+**File:** `src/data/sources.py:361`
 **Code:**
 
 ```python
@@ -234,7 +234,7 @@ for source in self.sources:
 | M-2 | `pip 25.3` path-traversal CVE (CVE-2026-1703) | installed tooling | Medium |
 | M-3 | `black 23.12.1` ReDoS + arbitrary-file-write CVEs | `pyproject.toml:28` | Medium |
 | M-4 | `pytest 7.4.4` temp-dir privilege-escalation (CVE-2025-71176) | `pyproject.toml:26` | Medium |
-| M-5 | `data_preprocessing.validate_data` is advisory-only; malformed rows still train | `src/data_preprocessing.py:218–288` | Medium |
+| M-5 | `data_preprocessing.validate_data` is advisory-only; malformed rows still train | `src/data/preprocessing.py:218–288` | Medium |
 | M-6 | Pinned `xlrd = ^2.0` has historically had parser CVEs on `.xls` | `pyproject.toml:12` | Medium |
 
 ### M-1. A full second copy of the repo is sitting inside the repo
@@ -298,12 +298,12 @@ pytest  7.4.4  CVE-2025-71176  fix: 9.0.3
 
 ### M-5. `validate_data` flags issues but does not fail the pipeline
 
-**File:** `src/data_preprocessing.py:218–288`
+**File:** `src/data/preprocessing.py:218–288`
 
 The validator collects warnings into `report["issues"]` and calls `print("[VALIDATE] WARNING: ...")` but returns unconditionally. The caller (`run_preprocessing_pipeline`, line 530) does not check the return value.
 
 ```python
-# src/data_preprocessing.py:530
+# src/data/preprocessing.py:530
 validation_report = validate_data(df)   # warnings only; never raised
 ```
 
@@ -319,11 +319,11 @@ def validate_data(df: pd.DataFrame, strict: bool = False) -> Dict:
     return report
 ```
 
-And in `run_preprocessing_pipeline` pass `strict=True` when invoked from `run_pipeline.py`.
+And in `run_preprocessing_pipeline` pass `strict=True` when invoked from `scripts/run_pipeline.py`.
 
 ### M-6. `xlrd = ^2.0` — historically CVE-heavy parser
 
-**File:** `pyproject.toml:12`. `xlrd 2.0.2` is currently installed. No CVE is currently open against `xlrd>=2.0` (which deliberately dropped `.xlsx` support to reduce attack surface), but earlier `1.x` had multiple "malformed `.xls` → crash / OOM" bugs. The project passes user-controlled paths (`--data-path`) directly to `pd.read_excel(path, header=1)` (line 324 in `data_sources.py`), which dispatches to `xlrd` for `.xls` files.
+**File:** `pyproject.toml:12`. `xlrd 2.0.2` is currently installed. No CVE is currently open against `xlrd>=2.0` (which deliberately dropped `.xlsx` support to reduce attack surface), but earlier `1.x` had multiple "malformed `.xls` → crash / OOM" bugs. The project passes user-controlled paths (`--data-path`) directly to `pd.read_excel(path, header=1)` (line 324 in `src/data/sources.py`), which dispatches to `xlrd` for `.xls` files.
 
 **Impact.** A crafted `.xls` could still trigger an uncaught exception or run the machine out of memory. No RCE vector known today, but the parser is old and not actively maintained.
 
@@ -348,15 +348,15 @@ df = pd.read_excel(path, header=1)
 |---|---|---|---|
 | L-1 | `ruff` target mismatch — pyproject says py39, dependencies pin `python >=3.10` | `pyproject.toml:19,24` | Low |
 | L-2 | `mypy --strict` produces 62 errors in 9 files | `src/*` | Low |
-| L-3 | `run_pipeline.py` does not validate that `data_path` is inside the repo | `run_pipeline.py:103` | Low |
-| L-4 | 26 ignored deprecation / user warnings mask future breakage | `src/data_preprocessing.py:34`, `src/eda.py:34`, `src/random_forest.py:77` | Low |
-| L-5 | RandomizedSearchCV does not seed the numpy / python RNGs globally from the CLI | `run_pipeline.py` | Low |
+| L-3 | `scripts/run_pipeline.py` does not validate that `data_path` is inside the repo | `scripts/run_pipeline.py:103` | Low |
+| L-4 | 26 ignored deprecation / user warnings mask future breakage | `src/data/preprocessing.py:34`, `src/analysis/eda.py:34`, `src/baselines/random_forest.py:77` | Low |
+| L-5 | RandomizedSearchCV does not seed the numpy / python RNGs globally from the CLI | `scripts/run_pipeline.py` | Low |
 
 ### L-1. `pyproject.toml` declares `target-version = "py39"` for ruff and black, but `python = ">=3.10,<3.13"`
 
 **File:** `pyproject.toml:19` (`ruff.target-version = "py39"`), `pyproject.toml:24` (`black.target-version = ["py39"]`), vs `pyproject.toml:6` (`python = ">=3.10,<3.13"`). The ruff config also selects `"UP"` which auto-rewrites to newer syntax — but targeted to py39 the rewriter won't pick up the PEP-604 `X | None` syntax that the code actually uses.
 
-**Impact.** Inconsistent — code uses `X | None` (PEP 604, py3.10+) in some places and `Optional[X]` in others (see `data_sources.py:53` mixed with `data_sources.py:202`). Markers running `ruff .` will not see the auto-upgrades they'd expect.
+**Impact.** Inconsistent — code uses `X | None` (PEP 604, py3.10+) in some places and `Optional[X]` in others (see `src/data/sources.py:53` mixed with `src/data/sources.py:202`). Markers running `ruff .` will not see the auto-upgrades they'd expect.
 
 **Fix.** Bump both to `py310`:
 
@@ -374,24 +374,24 @@ python_version = "3.10"
 **Tool output (abridged; full output reproduced in the Tooling section):**
 
 ```
-src/data_sources.py:438: Incompatible types in assignment
-src/data_preprocessing.py:117: Unused "type: ignore" comment
-src/random_forest.py:382: Name "plt.Figure" is not defined
-src/utils.py:506: No overload variant of "zip" matches ...
-src/utils.py:522: Unsupported operand types for - ("None" and "float")
+src/data/sources.py:438: Incompatible types in assignment
+src/data/preprocessing.py:117: Unused "type: ignore" comment
+src/baselines/random_forest.py:382: Name "plt.Figure" is not defined
+src/training/utils.py:506: No overload variant of "zip" matches ...
+src/training/utils.py:522: Unsupported operand types for - ("None" and "float")
 ... 62 total
 ```
 
-**Impact.** Not a security issue per se, but the `utils.py:522` case is a genuine bug: a `None - float` at runtime will raise `TypeError`. Type consistency issues:
+**Impact.** Not a security issue per se, but the `src/training/utils.py:522` case is a genuine bug: a `None - float` at runtime will raise `TypeError`. Type consistency issues:
 
-- `Optional[X]` in `data_sources.py:202`
+- `Optional[X]` in `src/data/sources.py:202`
 - `X | None` not used consistently (modules disagree).
 
-**Fix.** Run `mypy --strict src/` in CI; fix the two real bugs in `utils.py`; standardise on PEP-604 `X | None` across the codebase (matches Python ≥ 3.10 baseline).
+**Fix.** Run `mypy --strict src/` in CI; fix the two real bugs in `src/training/utils.py`; standardise on PEP-604 `X | None` across the codebase (matches Python ≥ 3.10 baseline).
 
 ### L-3. `--data-path` accepts any absolute path; no repo-containment check
 
-**File:** `run_pipeline.py:103–112`. The CLI resolves the path, checks extension and existence, but allows **any** `.xls`/`.xlsx` anywhere on the filesystem — including `/etc/shadow`-adjacent directories, `~/.ssh/…`, or `/tmp/` drop zones.
+**File:** `scripts/run_pipeline.py:103–112`. The CLI resolves the path, checks extension and existence, but allows **any** `.xls`/`.xlsx` anywhere on the filesystem — including `/etc/shadow`-adjacent directories, `~/.ssh/…`, or `/tmp/` drop zones.
 
 ```python
 resolved = Path(data_path).resolve()
@@ -405,7 +405,7 @@ data_path = str(resolved)
 **Fix.** Optional containment check when not explicitly opted out:
 
 ```python
-# run_pipeline.py
+# scripts/run_pipeline.py
 repo_root = Path(__file__).parent.resolve()
 if not args.allow_external_data:
     try:
@@ -418,7 +418,7 @@ if not args.allow_external_data:
 
 ### L-4. Blanket `warnings.filterwarnings("ignore", ...)` hides future breakage
 
-**Files:** `src/data_preprocessing.py:34`, `src/random_forest.py:77`, `src/eda.py:34` (the last uses the nuclear `warnings.filterwarnings("ignore")` with no category).
+**Files:** `src/data/preprocessing.py:34`, `src/baselines/random_forest.py:77`, `src/analysis/eda.py:34` (the last uses the nuclear `warnings.filterwarnings("ignore")` with no category).
 
 **Impact.** `sklearn`, `pandas`, and `numpy` routinely push API-deprecation warnings here. Silencing them globally hides signals that a CVE-mitigation upgrade (e.g. H-1) has actually broken behaviour.
 
@@ -432,11 +432,11 @@ with warnings.catch_warnings():
 
 ### L-5. CLI does not seed all RNGs at entry
 
-**File:** `run_pipeline.py`. The CLI does not call `utils.set_deterministic(seed=42)` at entry. Downstream code seeds `RandomForestClassifier(random_state=...)` and `StratifiedKFold(random_state=...)`, but any bare `np.random.rand(...)` (or library internals) runs on the unseeded global generator.
+**File:** `scripts/run_pipeline.py`. The CLI does not call `utils.set_deterministic(seed=42)` at entry. Downstream code seeds `RandomForestClassifier(random_state=...)` and `StratifiedKFold(random_state=...)`, but any bare `np.random.rand(...)` (or library internals) runs on the unseeded global generator.
 
 **Impact.** Determinism / reproducibility only; not a security finding. Markers who re-run may observe slightly different results depending on platform.
 
-**Fix.** In `run_pipeline.main()` insert at the top:
+**Fix.** In `scripts/run_pipeline.main()` insert at the top:
 
 ```python
 from utils import set_deterministic
@@ -449,7 +449,7 @@ set_deterministic(seed=42)
 
 | ID | Title | File | Severity |
 |---|---|---|---|
-| I-1 | Demographic features (SEX, EDUCATION, MARRIAGE) trained without fairness disclosure | `src/data_preprocessing.py:43–49` | Info |
+| I-1 | Demographic features (SEX, EDUCATION, MARRIAGE) trained without fairness disclosure | `src/data/preprocessing.py:43–49` | Info |
 | I-2 | No `CODEOWNERS`, `SECURITY.md`, or vulnerability-disclosure channel | repo root | Info |
 | I-3 | No CI / GitHub Actions workflow present | `.github/` absent | Info |
 | I-4 | Nothing checked into `LICENSE` beyond the MIT template | `LICENSE` | Info |
@@ -493,8 +493,8 @@ Content is standard MIT. No copyleft-conflict found in transitive deps (see "Lic
 
 The following dimensions were audited and passed:
 
-- **No `pickle`, `cPickle`, `yaml.load`, `eval`, `exec`, `compile`, `__import__`, `marshal` anywhere in `src/` or `run_pipeline.py`.** (grep returned zero hits.)
-- **No `subprocess.run(..., shell=True)` and no `os.system(...)` anywhere.** The only `subprocess` usage is `src/utils.py:165` which runs `git rev-parse HEAD` with `shell=False` and a 2-second timeout — safe.
+- **No `pickle`, `cPickle`, `yaml.load`, `eval`, `exec`, `compile`, `__import__`, `marshal` anywhere in `src/` or `scripts/run_pipeline.py`.** (grep returned zero hits.)
+- **No `subprocess.run(..., shell=True)` and no `os.system(...)` anywhere.** The only `subprocess` usage is `src/training/utils.py:165` which runs `git rev-parse HEAD` with `shell=False` and a 2-second timeout — safe.
 - **No hardcoded secrets, API keys, tokens, passwords, SSH / RSA private keys, AWS credentials, GitHub tokens, or Anthropic / OpenAI keys.** All occurrences of the word "token" are in transformer-vocabulary context; all occurrences of "password" are in academic text.
 - **Git history clean.** `git log --all -S "password"`, `-S "api_key"`, `-S "secret"`, `-S "ghp_"`, `-S "sk-"`, `-S "aws_access"`, `-S "BEGIN PRIVATE"` all return no commits.
 - **No `.env`, `.DS_Store`, `.idea/`, `.vscode/`, `__pycache__/`, or credential files in tracked git history.** `git ls-files` shows 36 files, all legitimate. `.DS_Store` and `.venv/` exist on disk but are `.gitignore`d.
@@ -508,7 +508,7 @@ The following dimensions were audited and passed:
 - **No `pre-commit-config.yaml`** → no third-party pre-commit hooks with unvetted source to audit.
 - **No PII in notebook outputs** beyond the username path noted in H-3. No email addresses, phone numbers, names of real clients, or real financial values beyond the public UCI dataset.
 - **Git remote is plain HTTPS** (`https://github.com/abailey81/credit-default-tabular-transformer.git`) — no SSH or token-embedded URLs.
-- **`run_pipeline.py` exits cleanly on missing data, wrong extension, or bad source mode** (validated in CLI logic, lines 106–111).
+- **`scripts/run_pipeline.py` exits cleanly on missing data, wrong extension, or bad source mode** (validated in CLI logic, lines 106–111).
 
 ---
 
@@ -531,8 +531,8 @@ pip-audit --desc on
 # 3. Code-injection / deserialization search
 # (run via the harness' Grep tool, equivalent to:)
 rg -n '(pickle|cPickle|joblib\.load|torch\.load|yaml\.load|\beval\(|\bexec\(|\bcompile\(|__import__|marshal|subprocess|os\.system|shell=True|importlib|pkg_resources|getenv|os\.environ)' --glob '**/*.py'
-# → One hit: src/utils.py:281 torch.load(..., weights_only=False)  [C-1]
-# → One hit: src/utils.py:29  import subprocess (used safely, L_1)
+# → One hit: src/training/utils.py:281 torch.load(..., weights_only=False)  [C-1]
+# → One hit: src/training/utils.py:29  import subprocess (used safely, L_1)
 
 # 4. Secret scan (source + history)
 rg -ni '(password|api_key|apikey|token|secret|Bearer|SECRET|PASSWORD|access_key|BEGIN RSA|BEGIN OPENSSH|BEGIN PRIVATE|AWS|aws_|client_secret)' --glob '!*.lock'
@@ -597,7 +597,7 @@ Ordered by risk × ease-of-fix:
 4. **[M-1] Delete the duplicate `credit-default-tabular-transformer/` nested repo.** *Effort: 2 min.*
 5. **[H-2] Add a 30-second watchdog around `fetch_ucirepo`** in `UCIRepoSource.load`. *Effort: 15 min.*
 6. **[H-4] Narrow `except Exception` in `ChainedDataSource`** to a recoverable-error tuple. *Effort: 10 min.*
-7. **[M-5] Add `strict=True` mode to `validate_data`** and call it from `run_pipeline.py`. *Effort: 10 min.*
+7. **[M-5] Add `strict=True` mode to `validate_data`** and call it from `scripts/run_pipeline.py`. *Effort: 10 min.*
 8. **[M-6] Add 50 MB size cap** in `LocalExcelSource.load`. *Effort: 5 min.*
 9. **[M-3, M-4, M-2] Bump dev-tool versions** — `black ^26.3.1`, `pytest ^9.0.3`, `pip >=26.0`. *Effort: 5 min.*
 10. **[L-1..L-5] Alignment fixes** — bump ruff/black/mypy target-version to py310; fix `utils.py:522` `None - float` bug; seed RNGs from CLI entry point. *Effort: 30 min combined.*

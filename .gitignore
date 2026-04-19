@@ -29,6 +29,7 @@ data/raw/*.xls
 data/raw/*.xlsx
 data/raw/*.csv
 data/processed/*.csv
+data/processed/splits/*.csv
 
 # Manual fallback dataset — *tracked* so the offline loader has something
 # to fall back to when the UCI API is unreachable.
@@ -44,11 +45,12 @@ data/processed/*.csv
 htmlcov/
 
 # ── Trained-model artefacts (heavy, regeneratable) ──
-# Reproduce via `poetry run python src/train.py …` or `src/train_mtlm.py …`
-# using the config.json saved alongside each run. The smaller JSON / CSV
-# diagnostic files (config.json, train_log.csv, test_metrics.json,
-# test_predictions.npz) stay in git so the head-to-head numbers and
-# ensemble script can be audited without re-running.
+# Reproduce via `poetry run python -m src.training.train …` or
+# `python -m src.training.train_mtlm …` using the config.json saved
+# alongside each run. The smaller JSON / CSV diagnostic files
+# (config.json, train_log.csv, test_metrics.json, test_predictions.npz)
+# stay in git so the head-to-head numbers and ensemble script can be
+# audited without re-running.
 *.pt
 *.pt.weights
 results/transformer/**/test_attn_weights.npz

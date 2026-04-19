@@ -10,15 +10,15 @@
       "metadata": {
         "missing": [],
         "checked_files": [
-          "results/rf_metrics.csv",
-          "results/rf_config.json",
-          "results/comparison_table.csv",
-          "results/comparison_table.md",
-          "results/evaluate_summary.json",
-          "data/processed/train_scaled.csv",
-          "data/processed/val_scaled.csv",
-          "data/processed/test_scaled.csv",
-          "data/processed/test_raw.csv",
+          "results/baseline/rf_metrics.csv",
+          "results/baseline/rf_config.json",
+          "results/evaluation/comparison/comparison_table.csv",
+          "results/evaluation/comparison/comparison_table.md",
+          "results/evaluation/comparison/evaluate_summary.json",
+          "data/processed/splits/train_scaled.csv",
+          "data/processed/splits/val_scaled.csv",
+          "data/processed/splits/test_scaled.csv",
+          "data/processed/splits/test_raw.csv",
           "data/processed/feature_metadata.json"
         ]
       }
@@ -55,16 +55,29 @@
     {
       "name": "git_clean",
       "passed": true,
-      "detail": "7 tracked changes",
+      "detail": "51 tracked changes",
       "metadata": {
         "dirty_files": [
-          " M figures/interpret/attention_per_head.png",
-          " M figures/interpret/attention_rollout.png",
-          " M figures/interpret/cls_feature_importance.png",
-          " M figures/interpret/defaulter_vs_nondefaulter_attention.png",
-          " M figures/interpret/feature_importance_comparison.png",
-          " M results/interpret.json",
-          " M src/interpret.py"
+          " M README.md",
+          " M data/README.md",
+          " M data/processed/README.md",
+          " M data/processed/splits/README.md",
+          " M data/raw/README.md",
+          " M docs/README.md",
+          " M figures/README.md",
+          " M figures/baseline/README.md",
+          " M figures/eda/README.md",
+          " M figures/evaluation/README.md",
+          " M figures/evaluation/calibration/README.md",
+          " M figures/evaluation/comparison/README.md",
+          " M figures/evaluation/fairness/README.md",
+          " M figures/evaluation/interpret/README.md",
+          " M figures/evaluation/significance/README.md",
+          " M figures/evaluation/uncertainty/README.md",
+          " M notebooks/README.md",
+          " M results/README.md",
+          " M results/analysis/README.md",
+          " M results/baseline/README.md"
         ],
         "is_clean": false
       }
@@ -72,7 +85,7 @@
     {
       "name": "rf_predictions_regenerate",
       "passed": true,
-      "detail": "max |\u0394p| = 0.00e+00 (threshold 1e-6)",
+      "detail": "max |delta p| = 0.00e+00 (threshold 1e-6)",
       "metadata": {
         "max_prob_diff": 0.0
       }
