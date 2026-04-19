@@ -1,8 +1,35 @@
-"""Feature embedding: tokenizer output -> (B, 24, d) with a learnable [CLS] at 0,
-demographics 1..3, hybrid PAY 4..9 (state + severity proj), numerics 10..23
-(identity + value proj). Flags: per-feature-type embeddings always on; optional
-temporal pos on PAY/BILL/PAY_AMT; optional [MASK] token for MTLM (N4) that
-swaps content while keeping feature + temporal positions intact."""
+"""Feature embedding: tokeniser output -> ``(B, 24, d_model)`` sequence.
+
+The layer takes the tensor dict produced by
+:mod:`src.tokenization.tokenizer` and produces the input the transformer
+encoder consumes. The output sequence is:
+
+    pos 0     [CLS]              — learnable, pooled for classification
+    pos 1..3  demographics       — SEX, EDUCATION, MARRIAGE
+    pos 4..9  PAY (hybrid)       — state emb + severity projection
+    pos 10..23 numerical         — feature emb + value projection (14 cols)
+
+Key design choices:
+
+* **Hybrid PAY (Novelty N1)** is produced in the tokeniser; here we sum
+  the state embedding and the severity projection so both signals
+  share the same attention pathway.
+* **Per-feature projections** for numerical columns: each of the 14
+  columns gets its own learned feature id + a shared value projection,
+  so the model can tell LIMIT_BAL apart from AGE even though both feed
+  through the same scalar -> d_model projection.
+* **Optional temporal positional encoding** (Ablation A7) adds a
+  month-indexed embedding to PAY_i / BILL_AMT_i / PAY_AMT_i. Non-temporal
+  tokens (demographics, LIMIT_BAL, AGE) pass through unchanged.
+* **Optional [MASK] token** (Novelty N4, MTLM) swaps the *content* at
+  flagged positions while preserving feature + temporal positional
+  signals. A masked PAY_0 still tells the model "pos 4, month 0" — only
+  its value is hidden.
+
+The module is self-contained: it can instantiate itself from
+``feature_metadata.json`` on disk, or from an explicit ``cat_vocab_sizes``
+dict (preferred in tests to avoid filesystem dependencies).
+"""
 
 from __future__ import annotations
 
@@ -19,18 +46,29 @@ from .tokenizer import (
     PAY_STATUS_FEATURES,
 )
 
-# token layout — pos 0 is [CLS], rest mirrors TOKEN_ORDER
-TOKEN_ORDER: List[str] = (
-    CATEGORICAL_FEATURES + PAY_STATUS_FEATURES + NUMERICAL_FEATURES
-)
-# 3 cat + 6 PAY + 14 num = 23 feature tokens (+1 CLS = 24)
+# ---------------------------------------------------------------------------
+# Token layout
+# ---------------------------------------------------------------------------
+# Position 0 is [CLS]; positions 1..23 follow TOKEN_ORDER.
+# 3 categorical + 6 PAY + 14 numerical = 23 feature tokens (+1 [CLS] = 24).
+# Every consumer of per-token attention, per-token importance, or
+# per-group masking should go through TOKEN_ORDER (or build_group_assignment
+# / build_temporal_layout below) rather than hard-code slice boundaries.
+TOKEN_ORDER: List[str] = CATEGORICAL_FEATURES + PAY_STATUS_FEATURES + NUMERICAL_FEATURES
 
-# slices into the 23-token pre-CLS block
+# Slice views into the 23-token pre-CLS block. Used by TemporalDecayBias /
+# FeatureGroupBias and anything else that masks by group.
 _SLICE_CAT = slice(0, 3)
 _SLICE_PAY = slice(3, 9)
 _SLICE_NUM = slice(9, 23)
 
-# temporal — month 0 = Sep 2005 (most recent), 5 = Apr 2005 (oldest)
+# ---------------------------------------------------------------------------
+# Temporal layout
+# ---------------------------------------------------------------------------
+# UCI dataset covers Apr 2005 -> Sep 2005. Our convention: month 0 is the
+# most recent (Sep 2005), month 5 is the oldest (Apr 2005). That way
+# PAY_0 / BILL_AMT1 / PAY_AMT1 all share month 0 — they correspond to
+# the same calendar period even though the UCI naming is inconsistent.
 N_MONTHS = 6
 _TEMPORAL_MONTH: Dict[str, int] = {}
 for _i, _feat in enumerate(PAY_STATUS_FEATURES):
@@ -40,25 +78,33 @@ for _i, _feat in enumerate([f"BILL_AMT{_m}" for _m in range(1, 7)]):
 for _i, _feat in enumerate([f"PAY_AMT{_m}" for _m in range(1, 7)]):
     _TEMPORAL_MONTH[_feat] = _i
 
-# per-token month idx, -1 = non-temporal
+# Per-token month index, with -1 for non-temporal tokens. Used to gate the
+# temporal positional lookup cleanly at forward time without a Python-level
+# branch over the 23 positions.
 _TEMPORAL_INDEX_PER_TOKEN = torch.tensor(
     [_TEMPORAL_MONTH.get(feat, -1) for feat in TOKEN_ORDER],
     dtype=torch.long,
 )
 
 
-# loaded lazily so a fresh clone can import this module without feature_metadata.json
+# Metadata loaded lazily so a fresh clone can import this module before
+# the preprocessing pipeline has ever run. Tests typically pass
+# cat_vocab_sizes directly to avoid touching disk.
 _METADATA_PATH = (
-    Path(__file__).resolve().parent.parent.parent
-    / "data" / "processed" / "feature_metadata.json"
+    Path(__file__).resolve().parent.parent.parent / "data" / "processed" / "feature_metadata.json"
 )
 
 
 def load_cat_vocab_sizes(
     metadata_path: Optional[Path] = None,
 ) -> Dict[str, int]:
-    """Pull categorical vocab sizes from feature_metadata.json. Tests should
-    pass cat_vocab_sizes directly to FeatureEmbedding to skip disk I/O."""
+    """Read categorical vocab sizes from ``feature_metadata.json``.
+
+    Prefer passing ``cat_vocab_sizes`` directly to ``FeatureEmbedding`` in
+    tests and libraries — this helper exists for notebook / CLI use where
+    hitting disk is fine and the JSON is always present. Raises
+    ``FileNotFoundError`` with a fix-me pointer if the file is missing.
+    """
     path = Path(metadata_path) if metadata_path is not None else _METADATA_PATH
     if not path.is_file():
         raise FileNotFoundError(
@@ -69,14 +115,17 @@ def load_cat_vocab_sizes(
         )
     with open(path) as f:
         meta = json.load(f)
-    return {
-        feat: info["n_categories"]
-        for feat, info in meta["categorical_features"].items()
-    }
+    return {feat: info["n_categories"] for feat, info in meta["categorical_features"].items()}
 
 
 def __getattr__(name: str):
-    """PEP 562 shim — loads CAT_VOCAB_SIZES on first access, then caches."""
+    """PEP 562 lazy attribute shim.
+
+    ``CAT_VOCAB_SIZES`` used to be a module-level constant computed at
+    import time, but that breaks fresh clones that don't have
+    ``feature_metadata.json`` yet. This shim defers the load until the
+    constant is actually accessed and caches the result in ``globals()``.
+    """
     if name == "CAT_VOCAB_SIZES":
         value = load_cat_vocab_sizes()
         globals()["CAT_VOCAB_SIZES"] = value
@@ -84,16 +133,22 @@ def __getattr__(name: str):
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
-# feature groups — source of truth for TemporalDecayBias/FeatureGroupBias and
-# anyone who needs positions of the three temporal groups in the 24-seq
+# ---------------------------------------------------------------------------
+# Feature groups (N2 + N3 + interpretability)
+# ---------------------------------------------------------------------------
+# Source of truth for TemporalDecayBias (N3), FeatureGroupBias (N2), and
+# every interpretability consumer that needs "which positions are PAY".
 
 _TEMPORAL_GROUPS: Dict[str, List[str]] = {
-    "pay":     list(PAY_STATUS_FEATURES),
-    "bill":    [f"BILL_AMT{_m}" for _m in range(1, 7)],
+    "pay": list(PAY_STATUS_FEATURES),
+    "bill": [f"BILL_AMT{_m}" for _m in range(1, 7)],
     "pay_amt": [f"PAY_AMT{_m}" for _m in range(1, 7)],
 }
 
 
+# Group ids used by FeatureGroupBias's per-group attention bias.
+# CLS is its own group so attention into / out of CLS is learnable
+# independently of demographics.
 FEATURE_GROUP_CLS = 0
 FEATURE_GROUP_DEMOGRAPHIC = 1
 FEATURE_GROUP_PAY = 2
@@ -101,13 +156,13 @@ FEATURE_GROUP_BILL = 3
 FEATURE_GROUP_PAY_AMT = 4
 N_FEATURE_GROUPS = 5
 
-# readable names for attention heatmaps and attribution panels
+# Readable names for attention heatmaps and attribution panels.
 FEATURE_GROUP_NAMES: Dict[int, str] = {
-    FEATURE_GROUP_CLS:         "CLS",
+    FEATURE_GROUP_CLS: "CLS",
     FEATURE_GROUP_DEMOGRAPHIC: "demographic",
-    FEATURE_GROUP_PAY:         "PAY",
-    FEATURE_GROUP_BILL:        "BILL_AMT",
-    FEATURE_GROUP_PAY_AMT:     "PAY_AMT",
+    FEATURE_GROUP_PAY: "PAY",
+    FEATURE_GROUP_BILL: "BILL_AMT",
+    FEATURE_GROUP_PAY_AMT: "PAY_AMT",
 }
 
 _DEMOGRAPHIC_FEATURES = set(CATEGORICAL_FEATURES) | {"LIMIT_BAL", "AGE"}
@@ -116,6 +171,7 @@ _PAY_AMT_FEATURES = {f"PAY_AMT{_m}" for _m in range(1, 7)}
 
 
 def _group_for_feature(feature_name: str) -> int:
+    """Map a feature name to its group id. Raises on unknown names."""
     if feature_name in _DEMOGRAPHIC_FEATURES:
         return FEATURE_GROUP_DEMOGRAPHIC
     if feature_name in PAY_STATUS_FEATURES:
@@ -128,19 +184,26 @@ def _group_for_feature(feature_name: str) -> int:
 
 
 def build_group_assignment(cls_offset: int = 1) -> List[int]:
-    """Group-index list for FeatureGroupBias. Length len(TOKEN_ORDER) +
-    cls_offset (24 by default with one [CLS] prepended). Derived from
-    TOKEN_ORDER so it can't drift. Pass cls_offset=0 to address the
-    pre-CLS 23-block directly."""
+    """Group-index list for ``FeatureGroupBias``.
+
+    Length ``len(TOKEN_ORDER) + cls_offset`` (24 by default with one [CLS]
+    prepended). Derived from ``TOKEN_ORDER`` so it can't drift when a
+    feature is added or reordered. Pass ``cls_offset=0`` to address the
+    pre-CLS 23-block directly (used by a few interpretability tools).
+    """
     assignment: List[int] = [FEATURE_GROUP_CLS] * cls_offset
     assignment.extend(_group_for_feature(f) for f in TOKEN_ORDER)
     return assignment
 
 
 def describe_token_layout(cls_offset: int = 1) -> str:
-    """Pretty table of `position | group | feature | month`. Derived from
-    TOKEN_ORDER so it can't desync with the live layer. Used in the notebook
-    and the report appendix."""
+    """Pretty ``pos | group | feature | month`` table for the 24-seq.
+
+    Used in the notebook and the report appendix. Derived from
+    ``TOKEN_ORDER`` so it can never desync with the live layer — handy
+    when reviewing attention rollouts where "position 9" needs to map
+    back to a feature name.
+    """
     lines: List[str] = []
     header = f"{'pos':>4}  {'group':<13}  {'feature':<13}  {'month':>5}"
     sep = "-" * len(header)
@@ -167,33 +230,59 @@ def describe_token_layout(cls_offset: int = 1) -> str:
 def build_temporal_layout(
     cls_offset: int = 1,
 ) -> Dict[str, Dict[str, List[int]]]:
-    """temporal_layout dict that TemporalDecayBias wants. Maps group name
-    ("pay"/"bill"/"pay_amt") to {"positions": [...], "months": [...]},
-    months 0-indexed (0 most recent, 5 oldest). cls_offset=0 for pre-CLS."""
+    """Build the ``temporal_layout`` dict that ``TemporalDecayBias`` consumes.
+
+    Maps group name (``"pay"`` / ``"bill"`` / ``"pay_amt"``) to
+    ``{"positions": [...], "months": [...]}``, months 0-indexed with 0 =
+    most recent. ``cls_offset=0`` addresses the pre-CLS 23-block, useful
+    when the caller prepends their own special tokens or works on a flat
+    23-sequence view.
+    """
     layout: Dict[str, Dict[str, List[int]]] = {}
     for group_name, feat_list in _TEMPORAL_GROUPS.items():
         layout[group_name] = {
             "positions": [cls_offset + TOKEN_ORDER.index(f) for f in feat_list],
-            "months":    list(range(len(feat_list))),
+            "months": list(range(len(feat_list))),
         }
     return layout
 
 
+# ---------------------------------------------------------------------------
+# FeatureEmbedding
+# ---------------------------------------------------------------------------
+
+
 class FeatureEmbedding(nn.Module):
-    """tokenizer output -> (B, 24, d_model).
+    """Tokenizer output -> ``(B, 24, d_model)`` ready for the encoder.
 
-    batch dict: cat_indices (per-feature (B,) longs), pay_state_ids (B, 6),
-    pay_severities (B, 6), num_values (B, 14), and optional mask_positions
-    (B, 23) for MTLM.
+    Expected batch dict:
 
-    cat_vocab_sizes=None loads from feature_metadata.json; pass explicitly to
-    keep tests hermetic.
-    use_temporal_pos adds a learnable nn.Embedding(6, d) per month on
-    PAY/BILL_AMT/PAY_AMT; non-temporal tokens untouched.
-    use_mask_token creates a learnable [MASK] vector for MTLM (N4). When the
-    batch carries mask_positions, the *content* embedding at flagged slots is
-    replaced by [MASK] while feature + temporal positions are preserved, so
-    the model still knows where and when the masked slot sits.
+    * ``cat_indices``    — per-feature ``(B,)`` longs.
+    * ``pay_state_ids``  — ``(B, 6)`` longs.
+    * ``pay_severities`` — ``(B, 6)`` floats in [0, 1].
+    * ``num_values``     — ``(B, 14)`` floats.
+    * ``mask_positions`` — ``(B, 23)`` bool, optional (MTLM only).
+
+    Flags:
+
+    * ``cat_vocab_sizes``   — pass explicitly to skip the JSON load; if
+      omitted, falls back to ``feature_metadata.json`` on disk.
+    * ``use_temporal_pos``  — add learnable ``nn.Embedding(6, d)`` per
+      month on PAY / BILL_AMT / PAY_AMT tokens. Demographics + LIMIT_BAL
+      + AGE pass through unchanged (they have no month).
+    * ``use_mask_token``    — create a learnable [MASK] vector for MTLM
+      (Novelty N4). When the batch carries ``mask_positions``, the
+      *content* embedding at flagged slots is replaced by the [MASK]
+      vector while positional signals (feature id + month) are preserved.
+
+    Invariants
+    ----------
+    * ``cat_vocab_sizes`` MUST match the training-split vocab used by the
+      tokeniser — mismatched sizes silently truncate the embedding table
+      lookup on unseen codes.
+    * When ``use_mask_token=True`` and ``mask_positions`` is absent from
+      the batch, the mask vector has no effect. (This is what makes the
+      module drop-in for MTLM fine-tuning without code changes.)
     """
 
     def __init__(
@@ -220,22 +309,27 @@ class FeatureEmbedding(nn.Module):
             )
         self.cat_vocab_sizes: Dict[str, int] = dict(cat_vocab_sizes)
 
+        # One embedding table per categorical feature. Using a ModuleDict
+        # rather than a single big table with offsets keeps state-dict
+        # keys self-documenting and makes per-feature freezing trivial.
         self.cat_embeddings = nn.ModuleDict(
-            {
-                feat: nn.Embedding(cat_vocab_sizes[feat], d_model)
-                for feat in CATEGORICAL_FEATURES
-            }
+            {feat: nn.Embedding(cat_vocab_sizes[feat], d_model) for feat in CATEGORICAL_FEATURES}
         )
 
-        # PAY hybrid: 4-state emb + 1-dim severity projection
+        # PAY hybrid: 4-state embedding + 1-dim severity projection. The
+        # two outputs are summed (not concatenated) so the attention
+        # pathway has uniform d_model across all token types.
         self.pay_state_embedding = nn.Embedding(4, d_model)
         self.pay_severity_proj = nn.Linear(1, d_model, bias=True)
 
-        # numerical: identity emb + value projection
+        # Numerical tokens: feature-identity embedding + shared scalar
+        # projection. The identity embedding is what lets attention
+        # distinguish LIMIT_BAL from AGE; the value projection only
+        # needs to know "how big is the number".
         self.num_feature_embedding = nn.Embedding(len(NUMERICAL_FEATURES), d_model)
         self.value_proj = nn.Linear(1, d_model, bias=True)
 
-        # positional across the full 24 slots (0 = CLS)
+        # Absolute positional embedding across the full 24 slots (0 = [CLS]).
         self.pos_embedding = nn.Embedding(len(TOKEN_ORDER) + 1, d_model)
 
         if use_temporal_pos:
@@ -244,16 +338,18 @@ class FeatureEmbedding(nn.Module):
             self.temporal_pos_embedding = None
 
         if use_mask_token:
+            # Small random init so the mask vector doesn't dominate the
+            # signal at the start of pretraining. 0.02 matches the
+            # embedding tables' init scale.
             self.mask_token = nn.Parameter(torch.randn(d_model) * 0.02)
         else:
             self.mask_token = None
 
         self.cls_token = nn.Parameter(torch.randn(1, 1, d_model) * 0.02)
 
-        # non-persistent buffers so they move with .to()
-        self.register_buffer(
-            "positions", torch.arange(1, len(TOKEN_ORDER) + 1), persistent=False
-        )
+        # Non-persistent buffers: they move with .to(device) but don't
+        # clutter state_dict or bloat checkpoint files.
+        self.register_buffer("positions", torch.arange(1, len(TOKEN_ORDER) + 1), persistent=False)
         self.register_buffer(
             "temporal_index_per_token", _TEMPORAL_INDEX_PER_TOKEN.clone(), persistent=False
         )
@@ -264,7 +360,14 @@ class FeatureEmbedding(nn.Module):
         self._init_weights()
 
     def _init_weights(self) -> None:
-        """N(0, 0.02) on emb tables, xavier-normal on projections."""
+        """N(0, 0.02) on embedding tables, xavier-normal on projections.
+
+        0.02 is the GPT-2 / BERT convention for transformer embeddings;
+        anything larger tends to dominate the positional signal at init
+        and make the first few hundred steps noisy. Projection layers use
+        xavier-normal so the scalar -> d_model expansion preserves variance
+        without knowing d_model at init time.
+        """
         for emb in self.cat_embeddings.values():
             nn.init.normal_(emb.weight, mean=0.0, std=0.02)
 
@@ -285,51 +388,56 @@ class FeatureEmbedding(nn.Module):
         B = batch["num_values"].shape[0]
         device = batch["num_values"].device
 
+        # Pull the pre-CLS positional slab once; positions [0..22] index
+        # into it for all three feature groups.
         all_pos_emb = self.pos_embedding(self.positions)  # (23, d)
 
-        # categoricals at seq 1..3
+        # Categoricals at seq 1..3 (pos 0 is [CLS] - added last).
         cat_tokens = torch.stack(
             [
-                self.cat_embeddings[feat](batch["cat_indices"][feat])
-                + all_pos_emb[pos]
+                self.cat_embeddings[feat](batch["cat_indices"][feat]) + all_pos_emb[pos]
                 for pos, feat in enumerate(CATEGORICAL_FEATURES)
             ],
             dim=1,
         )  # (B, 3, d)
 
-        # PAY at seq 4..9
+        # PAY at seq 4..9 — hybrid sum: state emb + severity proj + pos emb.
         n_cat = len(CATEGORICAL_FEATURES)
-        state_emb = self.pay_state_embedding(batch["pay_state_ids"])            # (B, 6, d)
+        state_emb = self.pay_state_embedding(batch["pay_state_ids"])  # (B, 6, d)
         sev_emb = self.pay_severity_proj(batch["pay_severities"].unsqueeze(-1))  # (B, 6, d)
         pay_pos = all_pos_emb[n_cat : n_cat + len(PAY_STATUS_FEATURES)]
-        pay_tokens = state_emb + sev_emb + pay_pos                               # (B, 6, d)
+        pay_tokens = state_emb + sev_emb + pay_pos  # (B, 6, d)
 
-        # numerics at seq 10..23
+        # Numerical at seq 10..23 — value proj + feature-id emb + pos emb.
         n_cat_pay = n_cat + len(PAY_STATUS_FEATURES)
         feat_idx = torch.arange(len(NUMERICAL_FEATURES), dtype=torch.long, device=device)
-        feat_emb = self.num_feature_embedding(feat_idx)                          # (14, d)
-        value_emb = self.value_proj(batch["num_values"].unsqueeze(-1))           # (B, 14, d)
+        feat_emb = self.num_feature_embedding(feat_idx)  # (14, d)
+        value_emb = self.value_proj(batch["num_values"].unsqueeze(-1))  # (B, 14, d)
         num_pos = all_pos_emb[n_cat_pay:]
-        num_tokens = value_emb + feat_emb + num_pos                              # (B, 14, d)
+        num_tokens = value_emb + feat_emb + num_pos  # (B, 14, d)
 
         feature_tokens = torch.cat([cat_tokens, pay_tokens, num_tokens], dim=1)  # (B, 23, d)
 
-        # temporal pos on temporal tokens only. outside the mask branch so
-        # MTLM can strip and re-add it cleanly.
+        # Temporal positional encoding on temporal tokens only. Computed
+        # outside the mask branch so MTLM can strip + re-add it cleanly —
+        # a masked PAY_0 still needs its month signal.
         if self.temporal_pos_embedding is not None:
             temporal_idx = self.temporal_index_per_token  # (23,)
             is_temporal = (temporal_idx >= 0).unsqueeze(-1).to(feature_tokens.dtype)
-            # clamp -1 to 0 so the lookup is safe; is_temporal gates the result
+            # Clamp -1 -> 0 so the lookup is safe; is_temporal gates the
+            # result back to zero for non-temporal tokens.
             safe_idx = temporal_idx.clamp(min=0)
-            temporal_emb = self.temporal_pos_embedding(safe_idx) * is_temporal   # (23, d)
+            temporal_emb = self.temporal_pos_embedding(safe_idx) * is_temporal  # (23, d)
             feature_tokens = feature_tokens + temporal_emb
         else:
             temporal_emb = None
 
-        # BERT convention: [MASK] replaces *content* (value + feature id), every
-        # positional signal is preserved. Strip feature + temporal pos, swap in
-        # mask_token, re-add pos. A masked PAY_0 still carries "pos 4, month 0";
-        # a masked PAY_6 still carries "pos 9, month 5".
+        # MTLM masking (BERT convention): [MASK] replaces the *content*
+        # (value + feature id). All positional signals are preserved. The
+        # strip-then-readd pattern is equivalent to masking on the content
+        # alone but keeps the code path symmetric with / without temporal
+        # pos. A masked PAY_0 still carries "pos 4, month 0"; a masked
+        # PAY_6 still carries "pos 9, month 5".
         if self.mask_token is not None and "mask_positions" in batch:
             mask_positions = batch["mask_positions"].to(device)
             if mask_positions.shape != (B, 23):
@@ -340,25 +448,30 @@ class FeatureEmbedding(nn.Module):
             content = feature_tokens - pos_emb_23
             if temporal_emb is not None:
                 content = content - temporal_emb
-            mask_vec = self.mask_token.unsqueeze(0).unsqueeze(0)                 # (1, 1, d)
-            mask_bcast = mask_positions.unsqueeze(-1).to(feature_tokens.dtype)   # (B, 23, 1)
+            mask_vec = self.mask_token.unsqueeze(0).unsqueeze(0)  # (1, 1, d)
+            mask_bcast = mask_positions.unsqueeze(-1).to(feature_tokens.dtype)  # (B, 23, 1)
             new_content = content * (1.0 - mask_bcast) + mask_vec * mask_bcast
             feature_tokens = new_content + pos_emb_23
             if temporal_emb is not None:
                 feature_tokens = feature_tokens + temporal_emb
 
-        # prepend [CLS] at pos 0
+        # Prepend [CLS] at pos 0. We add its positional embedding here (not
+        # at init) so the [CLS] parameter stays pure "content" and the
+        # pos_embedding table stays the single source of position.
         cls_pos = self.pos_embedding(torch.zeros(1, dtype=torch.long, device=device))
-        cls = (self.cls_token + cls_pos).expand(B, -1, -1)                       # (B, 1, d)
+        cls = (self.cls_token + cls_pos).expand(B, -1, -1)  # (B, 1, d)
 
-        out = torch.cat([cls, feature_tokens], dim=1)                            # (B, 24, d)
+        out = torch.cat([cls, feature_tokens], dim=1)  # (B, 24, d)
         return self.dropout(self.norm(out))
 
     def freeze_encoder(self, freeze: bool = True) -> None:
-        """Toggle requires_grad on every owned param. Used in two-stage
-        fine-tuning: after loading an MTLM checkpoint, freeze for the first
-        few supervised epochs so the head can settle, then unfreeze for joint
-        fine-tuning."""
+        """Toggle ``requires_grad`` on every owned parameter.
+
+        Used in two-stage fine-tuning (§8.5.5): after loading an MTLM
+        checkpoint we freeze the embedding for the first few supervised
+        epochs so the classification head settles on stable features,
+        then unfreeze for joint fine-tuning at a lower LR.
+        """
         for param in self.parameters():
             param.requires_grad = not freeze
 
@@ -369,15 +482,42 @@ class FeatureEmbedding(nn.Module):
     ) -> Dict[str, List[str]]:
         """Copy embedding-relevant tensors out of a larger checkpoint.
 
-        Tolerates common wrapper prefixes ("", "embedding.", "feature_embedding.",
-        "module.") and drops unrelated keys (transformer blocks, classifier heads).
-        Shape mismatches on matched keys always raise. strict=True raises KeyError
-        if any owned param has no source tensor. Returns {loaded, missing, unexpected}
-        for tests and handover logging.
+        Designed for the MTLM -> supervised handover: an MTLM model is a
+        thin wrapper over this layer plus a prediction head, so its
+        state-dict keys are prefixed with ``"embedding."`` or
+        ``"feature_embedding."``. This method tolerates those prefixes,
+        silently drops unrelated keys (transformer blocks, classifier
+        heads, MTLM heads), and returns a report that tests can assert
+        against.
+
+        Parameters
+        ----------
+        state_dict
+            Flat mapping from some source model's state_dict.
+        strict
+            If ``True`` and any owned parameter has no source tensor,
+            raise ``KeyError``. ``False`` (default) is appropriate for
+            MTLM -> supervised where some parts of the destination
+            (e.g. the [MASK] token) may legitimately start fresh.
+
+        Returns
+        -------
+        dict
+            ``{"loaded": [...], "missing": [...], "unexpected": [...]}``.
+
+        Raises
+        ------
+        ValueError
+            Shape mismatch on any matched key. This is always fatal —
+            silently reusing a 64-d checkpoint in a 32-d model would
+            corrupt training.
+        KeyError
+            ``strict=True`` and some owned param had no source tensor.
         """
         own_keys = set(self.state_dict().keys())
 
-        # "" first so a direct FeatureEmbedding checkpoint skips the prefix hunt
+        # Empty prefix first so a direct FeatureEmbedding checkpoint
+        # (no wrapper) skips the prefix hunt entirely.
         candidate_prefixes = ("", "embedding.", "feature_embedding.", "module.")
 
         normalised: Dict[str, torch.Tensor] = {}
@@ -387,13 +527,15 @@ class FeatureEmbedding(nn.Module):
             for prefix in candidate_prefixes:
                 if prefix and not raw_key.startswith(prefix):
                     continue
-                stripped = raw_key[len(prefix):] if prefix else raw_key
+                stripped = raw_key[len(prefix) :] if prefix else raw_key
                 if stripped in own_keys:
                     matched_own = stripped
                     break
             if matched_own is None:
                 unexpected.append(raw_key)
                 continue
+            # First match wins — if two prefixes map to the same own key
+            # we keep the first (most specific) source.
             if matched_own not in normalised:
                 normalised[matched_own] = tensor
 
@@ -406,36 +548,42 @@ class FeatureEmbedding(nn.Module):
                     f"{key!r} (own {tuple(own.shape)} vs incoming "
                     f"{tuple(tensor.shape)})"
                 )
-            # single-key load_state_dict reuses nn.Module's dtype/device handling
+            # Single-key load_state_dict per tensor reuses nn.Module's
+            # dtype/device handling — copying via param.data would miss
+            # the parameter-registration bookkeeping.
             self.load_state_dict({key: tensor}, strict=False)
             loaded.append(key)
 
         missing = sorted(own_keys - set(loaded))
         if strict and missing:
             raise KeyError(
-                f"init_from_pretrained_statedict(strict=True): missing keys "
-                f"{missing}"
+                f"init_from_pretrained_statedict(strict=True): missing keys " f"{missing}"
             )
 
         return {
-            "loaded":     sorted(loaded),
-            "missing":    missing,
+            "loaded": sorted(loaded),
+            "missing": missing,
             "unexpected": sorted(unexpected),
         }
 
 
 if __name__ == "__main__":
+    # Smoke test: exercises every branch of forward() — baseline,
+    # temporal on, mask on. Each sub-block ends with explicit assertions
+    # so a regression (e.g. a dead gradient path) fails loudly.
     torch.manual_seed(0)
 
     B = 4
-    # non-zero severity on delinquent states hits the severity proj
+    # Build a batch with non-zero severity on delinquent states so the
+    # severity projection actually gets exercised (zero severity on every
+    # row would leave its gradient empty and mask a bug).
     batch: Dict[str, torch.Tensor] = {
         "cat_indices": {
-            "SEX":       torch.tensor([0, 1, 0, 1]),
+            "SEX": torch.tensor([0, 1, 0, 1]),
             "EDUCATION": torch.tensor([0, 1, 2, 3]),
-            "MARRIAGE":  torch.tensor([0, 1, 2, 0]),
+            "MARRIAGE": torch.tensor([0, 1, 2, 0]),
         },
-        "pay_state_ids":  torch.tensor(
+        "pay_state_ids": torch.tensor(
             [
                 [0, 1, 2, 3, 3, 3],
                 [3, 3, 2, 1, 0, 0],
@@ -453,8 +601,8 @@ if __name__ == "__main__":
             ],
             dtype=torch.float,
         ),
-        "num_values":     torch.randn(B, 14),
-        "label":          torch.tensor([0.0, 1.0, 0.0, 1.0]),
+        "num_values": torch.randn(B, 14),
+        "label": torch.tensor([0.0, 1.0, 0.0, 1.0]),
     }
 
     print("A: baseline (no temporal, no mask):")
@@ -465,21 +613,24 @@ if __name__ == "__main__":
     assert out_a.shape == (B, 24, 32)
     assert not torch.isnan(out_a).any() and not torch.isinf(out_a).any()
 
-    # random-weighted loss, not bare .sum(): LayerNorm is zero-mean per token
-    # so a sum-loss kills gradients for constant-input params like [CLS].
-    # a random dot-product mimics a classification head and hits every param.
+    # Random-weighted loss, not bare .sum(): LayerNorm is zero-mean per
+    # token so a sum-loss kills gradients for constant-input params like
+    # [CLS]. A random dot-product mimics a downstream classification head
+    # and ensures every parameter sees non-zero gradient.
     torch.manual_seed(1)
     proj = torch.randn_like(model_a(batch))
     model_a.train()
     out_a_train = model_a(batch)
     (out_a_train * proj).sum().backward()
-    no_grad = [n for n, p in model_a.named_parameters() if p.grad is None or p.grad.abs().sum() == 0]
+    no_grad = [
+        n for n, p in model_a.named_parameters() if p.grad is None or p.grad.abs().sum() == 0
+    ]
     assert not no_grad, f"zero-grad params: {no_grad}"
 
     sev_w_grad = model_a.pay_severity_proj.weight.grad
-    assert sev_w_grad is not None and sev_w_grad.abs().sum().item() > 0, (
-        "pay_severity_proj not exercised -- non-zero severity regressed"
-    )
+    assert (
+        sev_w_grad is not None and sev_w_grad.abs().sum().item() > 0
+    ), "pay_severity_proj not exercised -- non-zero severity regressed"
     print(f"  pay_severity_proj grad L1: {sev_w_grad.abs().sum().item():.4f} OK")
     print("  all params have non-zero gradients OK")
 
@@ -494,10 +645,12 @@ if __name__ == "__main__":
     assert model_b.temporal_pos_embedding.weight.grad.abs().sum().item() > 0
     print("  temporal_pos_embedding receives gradient OK")
     non_temp = (model_b.temporal_index_per_token == -1).nonzero(as_tuple=True)[0]
-    # non-temporal: SEX(0), EDUCATION(1), MARRIAGE(2), LIMIT_BAL(9), AGE(10)
-    # temporal: PAY_0..6 at 3..8, BILL_AMT1..6 at 11..16, PAY_AMT1..6 at 17..22
+    # In the 23-block: non-temporal tokens are SEX(0), EDUCATION(1),
+    # MARRIAGE(2), LIMIT_BAL(9), AGE(10). Everything else has a month.
     expected_non_temp = [0, 1, 2, 9, 10]
-    assert non_temp.tolist() == expected_non_temp, f"unexpected non-temporal set {non_temp.tolist()}"
+    assert (
+        non_temp.tolist() == expected_non_temp
+    ), f"unexpected non-temporal set {non_temp.tolist()}"
     print(f"  non-temporal token indices (in 23-block): {expected_non_temp} OK")
 
     print("\nC: [MASK] token on:")
@@ -512,32 +665,33 @@ if __name__ == "__main__":
     assert out_c.shape == (B, 24, 32)
     assert not torch.isnan(out_c).any()
 
-    # no mask positions -> output must be independent of mask_token
+    # With no mask positions, the output must be independent of mask_token.
+    # Verify by perturbing mask_token and confirming the output doesn't move.
     batch_no_mask = {**batch, "mask_positions": torch.zeros(B, 23, dtype=torch.bool)}
     out_c_nomask = model_c(batch_no_mask)
     saved = model_c.mask_token.data.clone()
     with torch.no_grad():
         model_c.mask_token.data.add_(100.0)
     out_c_nomask_perturbed = model_c(batch_no_mask)
-    assert torch.allclose(out_c_nomask, out_c_nomask_perturbed, atol=1e-5), (
-        "mask_token value influenced output with no masked positions"
-    )
+    assert torch.allclose(
+        out_c_nomask, out_c_nomask_perturbed, atol=1e-5
+    ), "mask_token value influenced output with no masked positions"
     with torch.no_grad():
         model_c.mask_token.data.copy_(saved)
     print("  with empty mask, mask_token perturbation has no effect OK")
 
-    # masked slots differ run-to-run, unmasked slots don't. LayerNorm is
-    # translation-invariant on the feature dim, so comparing mask_token shifts
-    # directly won't work — compare the two runs.
+    # Masked slots must differ run-to-run; unmasked slots must not. Note:
+    # LayerNorm is translation-invariant on the feature dim, so comparing
+    # raw mask_token shifts directly won't work — compare the two runs.
     diff_at_mask = (out_c[0, 1 + 3] - out_c_nomask[0, 1 + 3]).abs().sum().item()
     diff_at_unmasked = (out_c[3, 1 + 0] - out_c_nomask[3, 1 + 0]).abs().sum().item()
     assert diff_at_mask > 1e-3, (
         f"masked slot (0, PAY_0) must differ between masked and unmasked runs, "
         f"got L1 {diff_at_mask:.6f}"
     )
-    assert diff_at_unmasked < 1e-4, (
-        f"unmasked slot (3, SEX) must be identical between runs, got L1 {diff_at_unmasked:.6f}"
-    )
+    assert (
+        diff_at_unmasked < 1e-4
+    ), f"unmasked slot (3, SEX) must be identical between runs, got L1 {diff_at_unmasked:.6f}"
     print(f"  masked slot differs (L1 {diff_at_mask:.3f}), unmasked identical OK")
 
     torch.manual_seed(0)
@@ -562,10 +716,9 @@ if __name__ == "__main__":
 
     print("\nF: init_from_pretrained_statedict:")
     src_model = FeatureEmbedding(d_model=32, dropout=0.0, use_mask_token=True)
-    # fake full-transformer checkpoint: emb keys under "embedding." + junk keys
-    wrapper_sd = {
-        f"embedding.{k}": v.clone() for k, v in src_model.state_dict().items()
-    }
+    # Simulate a full-transformer checkpoint: embedding keys under
+    # "embedding." + a couple of junk keys the loader should ignore.
+    wrapper_sd = {f"embedding.{k}": v.clone() for k, v in src_model.state_dict().items()}
     wrapper_sd["classifier.weight"] = torch.randn(1, 32)
     wrapper_sd["transformer_block_0.attn.weight"] = torch.randn(32, 32)
 
@@ -575,9 +728,9 @@ if __name__ == "__main__":
     assert "classifier.weight" in report["unexpected"]
     assert "transformer_block_0.attn.weight" in report["unexpected"]
     for key in report["loaded"]:
-        assert torch.equal(dst_model.state_dict()[key], src_model.state_dict()[key]), (
-            f"{key} not correctly copied"
-        )
+        assert torch.equal(
+            dst_model.state_dict()[key], src_model.state_dict()[key]
+        ), f"{key} not correctly copied"
     print(
         f"  loaded={len(report['loaded'])}  unexpected={len(report['unexpected'])}  "
         f"missing={len(report['missing'])} OK"
@@ -603,7 +756,7 @@ if __name__ == "__main__":
 
     print("\nG: describe_token_layout:")
     layout_str = describe_token_layout()
-    # header + separator + 24 rows = 26 lines
+    # header + separator + 24 rows = 26 lines.
     assert layout_str.count("\n") >= 25, "layout should have at least 26 lines"
     assert "CLS" in layout_str and "PAY_0" in layout_str and "BILL_AMT1" in layout_str
     assert "demographic" in layout_str

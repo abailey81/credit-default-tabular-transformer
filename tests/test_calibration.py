@@ -56,15 +56,14 @@ def test_brier_decomposition_identity(miscalibrated):
     y, p = miscalibrated
     d = cal.brier_decomposition(y, p, n_bins=10)
     approx = d.reliability - d.resolution + d.uncertainty
-    assert abs(approx - d.brier) < 0.02, (
-        f"Brier decomposition identity broken: {approx} vs {d.brier}"
-    )
+    assert (
+        abs(approx - d.brier) < 0.02
+    ), f"Brier decomposition identity broken: {approx} vs {d.brier}"
 
 
 def test_equal_mass_bins_never_empty():
     rng = np.random.default_rng(2)
     p = rng.beta(1, 9, size=1000)
-    y = rng.binomial(1, p).astype(int)
     bins = cal._bin_indices(p, n_bins=10, strategy="equal_mass")
     counts = np.bincount(bins)
     assert (counts > 0).all(), f"empty bins found: {counts}"
@@ -82,9 +81,7 @@ def test_temperature_reduces_ece_on_overconfident(miscalibrated):
     ts = cal.TemperatureScaling().fit(y, p)
     p_cal = ts.transform(p)
     ece_cal = cal.expected_calibration_error(y, p_cal)
-    assert ece_cal < ece_raw * 0.7, (
-        f"Temperature didn't help: {ece_raw:.4f} -> {ece_cal:.4f}"
-    )
+    assert ece_cal < ece_raw * 0.7, f"Temperature didn't help: {ece_raw:.4f} -> {ece_cal:.4f}"
     assert ts.temperature_ > 1.0
 
 
@@ -123,7 +120,10 @@ def test_calibrate_and_score_produces_every_calibrator(miscalibrated):
     y, p = miscalibrated
     n = len(y) // 2
     results = cal.calibrate_and_score(
-        y[:n], p[:n], y[n:], p[n:],
+        y[:n],
+        p[:n],
+        y[n:],
+        p[n:],
         run_name="unit",
     )
     names = [r.calibrator for r in results]
@@ -133,9 +133,7 @@ def test_calibrate_and_score_produces_every_calibrator(miscalibrated):
         if r.calibrator == "identity":
             continue
         if r.calibrator in ("platt", "isotonic"):
-            assert r.metrics["ece_equal_width"] < ece_identity, (
-                f"{r.calibrator} didn't improve ECE"
-            )
+            assert r.metrics["ece_equal_width"] < ece_identity, f"{r.calibrator} didn't improve ECE"
 
 
 def test_probs_to_logits_invertible():
@@ -149,14 +147,17 @@ def test_main_writes_artefacts(tmp_path):
     seed_42 = REPO / "results" / "transformer" / "seed_42"
     if not (seed_42 / "val_predictions.npz").is_file():
         pytest.skip("no committed transformer runs; skipping e2e test")
-    rc = cal.main([
-        "--runs", str(seed_42),
-        "--output-dir", str(tmp_path / "out"),
-        "--figures-dir", str(tmp_path / "fig"),
-    ])
+    rc = cal.main(
+        [
+            "--runs",
+            str(seed_42),
+            "--output-dir",
+            str(tmp_path / "out"),
+            "--figures-dir",
+            str(tmp_path / "fig"),
+        ]
+    )
     assert rc == 0
     assert (tmp_path / "out" / "calibration_metrics.csv").is_file()
-    summary = json.loads(
-        (tmp_path / "out" / "calibration_summary.json").read_text()
-    )
+    summary = json.loads((tmp_path / "out" / "calibration_summary.json").read_text())
     assert len(summary) >= 3

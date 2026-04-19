@@ -22,23 +22,30 @@ def synthetic_runs():
     runs = []
     for i in range(3):
         p = np.clip(0.3 + 0.4 * y + 0.15 * rng.standard_normal(n), 0.0, 1.0)
-        runs.append({
-            "run_name": f"seed_{i}",
-            "metrics": {
-                "auc_roc": 0.8, "auc_pr": 0.5, "f1": 0.5, "accuracy": 0.75,
-                "precision": 0.5, "recall": 0.5, "brier": 0.2, "ece": 0.1,
-            },
-            "threshold": 0.5,
-            "y_true": y,
-            "y_prob": p,
-            "y_pred": (p >= 0.5).astype(int),
-        })
+        runs.append(
+            {
+                "run_name": f"seed_{i}",
+                "metrics": {
+                    "auc_roc": 0.8,
+                    "auc_pr": 0.5,
+                    "f1": 0.5,
+                    "accuracy": 0.75,
+                    "precision": 0.5,
+                    "recall": 0.5,
+                    "brier": 0.2,
+                    "ece": 0.1,
+                },
+                "threshold": 0.5,
+                "y_true": y,
+                "y_prob": p,
+                "y_pred": (p >= 0.5).astype(int),
+            }
+        )
     return runs
 
 
 def test_ensemble_run_arithmetic_matches_plain_mean(synthetic_runs):
-    result = ev.ensemble_run(synthetic_runs, mode="arithmetic",
-                             display_name="ens")
+    result = ev.ensemble_run(synthetic_runs, mode="arithmetic", display_name="ens")
     expected_prob = np.mean([r["y_prob"] for r in synthetic_runs], axis=0)
     assert np.allclose(result["y_prob"], expected_prob)
     assert result["run_name"] == "ens"
@@ -46,8 +53,7 @@ def test_ensemble_run_arithmetic_matches_plain_mean(synthetic_runs):
 
 
 def test_ensemble_run_geometric_sane(synthetic_runs):
-    result = ev.ensemble_run(synthetic_runs, mode="geometric",
-                             display_name="ens_geo")
+    result = ev.ensemble_run(synthetic_runs, mode="geometric", display_name="ens_geo")
     assert ((result["y_prob"] >= 0) & (result["y_prob"] <= 1)).all()
     arith = ev.ensemble_run(synthetic_runs, mode="arithmetic")
     assert not np.allclose(result["y_prob"], arith["y_prob"])
@@ -69,10 +75,12 @@ def test_ensemble_run_rejects_mismatched_y_true(synthetic_runs):
 
 def test_build_comparison_table_includes_ensemble_row(synthetic_runs):
     from_scratch = ev.aggregate_runs(synthetic_runs)
-    ensemble = ev.ensemble_run(synthetic_runs, mode="arithmetic",
-                               display_name="ens")
+    ensemble = ev.ensemble_run(synthetic_runs, mode="arithmetic", display_name="ens")
     table = ev.build_comparison_table(
-        from_scratch, transformer_mtlm=None, rf={}, ensemble=ensemble,
+        from_scratch,
+        transformer_mtlm=None,
+        rf={},
+        ensemble=ensemble,
     )
     assert any("ensemble" in str(x).lower() for x in table["model"])
 
@@ -95,8 +103,7 @@ def test_aggregate_runs_warns_and_propagates_on_nan(synthetic_runs, caplog):
     assert np.isnan(agg["mean"]["auc_roc"])
     messages = [rec.getMessage() for rec in caplog.records]
     assert any("NaN auc_roc" in m and runs[0]["run_name"] in m for m in messages), (
-        f"Expected a NaN-auc_roc warning mentioning {runs[0]['run_name']!r}; "
-        f"got: {messages}"
+        f"Expected a NaN-auc_roc warning mentioning {runs[0]['run_name']!r}; " f"got: {messages}"
     )
 
 

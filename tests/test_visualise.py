@@ -105,10 +105,14 @@ def test_main_produces_all_five_figures(tmp_path: Path):
     if not (seed_42 / "test_predictions.npz").is_file():
         pytest.skip("no committed training artefacts; skipping end-to-end test")
 
-    rc = vis.main([
-        "--runs", str(seed_42),
-        "--output-dir", str(tmp_path),
-    ])
+    rc = vis.main(
+        [
+            "--runs",
+            str(seed_42),
+            "--output-dir",
+            str(tmp_path),
+        ]
+    )
     assert rc == 0
 
     for name in (

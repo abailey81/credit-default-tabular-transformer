@@ -32,7 +32,7 @@ This project develops two models for predicting credit card default on the [UCI 
 
 The dataset contains **6 monthly snapshots** of payment behaviour (April--September 2005) per client. The EDA in this repository reveals clear temporal divergence between defaulters and non-defaulters, motivating a sequence-aware architecture.
 
-> This repository currently contains **Phases 1--7 end-to-end**: preprocessing, EDA, tokenisation, embedding, attention, transformer encoder, top-level `TabularTransformer`, the supervised training loop, MTLM (masked-tabular-language-modelling) pretraining, the 4-model ensemble, and the 200-iter tuned Random Forest benchmark. Phase 8+ (formal evaluation, calibration, fairness, UQ, attention interpretability, statistical significance) is deliberately scoped to a subsequent PR.
+> This repository currently contains **Phases 1-14 end-to-end**: preprocessing, EDA, tokenisation, embedding, attention, transformer encoder, top-level `TabularTransformer`, the supervised training loop, MTLM (masked-tabular-language-modelling) pretraining, the 4-model ensemble, the 200-iter tuned Random Forest benchmark, plus the full Section-4 evidence pack — head-to-head comparison, post-hoc calibration (ECE 0.26 -> 0.011), subgroup fairness audit (N10), MC-dropout uncertainty + refuse curve (N11), paired-bootstrap / DeLong / McNemar significance with BH-FDR correction, attention-rollout interpretability, and a 7-check reproducibility harness. See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the folder-by-folder guide.
 
 ### Dataset
 
@@ -45,6 +45,101 @@ The dataset contains **6 monthly snapshots** of payment behaviour (April--Septem
 | **Temporal span** | 6 monthly snapshots (April--September 2005) |
 | **Class imbalance** | 3.5 : 1 (non-default : default) |
 | **Reference** | Yeh & Lien (2009). *Expert Systems with Applications*, 36(2), 2473--2480 |
+
+<br>
+
+## Quick Start
+
+Two supported paths are below. See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the folder map and how the stages fit together.
+
+### Option A --- End-to-end (one command)
+
+```bash
+poetry install
+poetry run python scripts/run_all.py
+```
+
+This walks every stage in order --- preprocessing, EDA, RF benchmark, supervised
+transformer training (one run per seed in `[42, 1, 2]`), MTLM pretraining +
+fine-tune, the full evaluation battery (comparison table, figures, calibration,
+fairness, uncertainty, significance, interpret), and finally a reproducibility
+cross-check. Expensive training stages auto-skip when their checkpoints already
+exist, so a re-run on a machine with committed artefacts skips straight to
+evaluation. Key outputs: [`results/evaluation/comparison/comparison_table.md`](results/evaluation/comparison/comparison_table.md),
+[`figures/evaluation/`](figures/evaluation/), and the reproducibility report at
+[`results/repro/repro_report.json`](results/repro/repro_report.json). Per-stage
+logs land under `results/pipeline/logs/run_all.<stage>.log`.
+
+Fast-smoke variant (one seed, tiny MC-dropout + bootstrap budgets --- full run
+in minutes, not hours):
+
+```bash
+poetry run python scripts/run_all.py --n-samples 5 --n-resamples 200 --seeds 42
+```
+
+Useful flags: `--skip-train`, `--skip-mtlm`, `--skip-eda`, `--force`
+(retrain even when checkpoints exist), `--only {data,eda,rf,train,mtlm,evaluate}`
+for single-stage debugging, `--mtlm-seed`. Run with `-h` for the full list.
+
+### Option B --- Step-by-step (fine-grained control)
+
+Each stage has its own module and can be re-run in isolation. Numbered below in
+the order `run_all.py` invokes them:
+
+1. **Preprocessing** (produces `data/processed/*.csv`)
+   ```bash
+   poetry run python scripts/run_pipeline.py --preprocess-only
+   ```
+2. **Exploratory data analysis** (produces `figures/eda/*.png` + `results/analysis/summary_statistics.{csv,tex}`)
+   ```bash
+   poetry run python scripts/run_pipeline.py --eda-only
+   # or interactively: notebooks/01_eda.ipynb
+   ```
+3. **Random Forest benchmark**
+   ```bash
+   poetry run python -m src.baselines.random_forest
+   ```
+4. **RF prediction regenerator** (writes `results/baseline/rf/test_predictions.npz`)
+   ```bash
+   poetry run python -m src.baselines.rf_predictions
+   ```
+5. **Supervised transformer training** (per seed --- repeat for 1 and 2)
+   ```bash
+   poetry run python -m src.training.train --seed 42 --output-dir results/transformer/seed_42
+   ```
+6. **MTLM self-supervised pretraining**
+   ```bash
+   poetry run python -m src.training.train_mtlm --seed 42 --output-dir results/mtlm/run_42
+   ```
+7. **MTLM fine-tune** (supervised head on top of the pretrained encoder)
+   ```bash
+   poetry run python -m src.training.train --seed 42 \
+       --pretrained-encoder results/mtlm/run_42/encoder_pretrained.pt \
+       --output-dir results/transformer/seed_42_mtlm_finetune
+   ```
+8. **Evaluation** (builds `results/evaluation/comparison/comparison_table.md`)
+   ```bash
+   poetry run python -m src.evaluation.evaluate
+   ```
+9. **Visualisation** (five report figures into `figures/evaluation/comparison/`)
+   ```bash
+   poetry run python -m src.evaluation.visualise
+   ```
+10. **Calibration, fairness, uncertainty, significance, interpret**
+    ```bash
+    poetry run python -m src.evaluation.calibration
+    poetry run python -m src.evaluation.fairness
+    poetry run python -m src.evaluation.uncertainty --n-samples 50
+    poetry run python -m src.evaluation.significance --n-resamples 2000
+    poetry run python -m src.evaluation.interpret
+    ```
+11. **Reproducibility check** (regenerates every derivative artefact and diffs vs. committed copy)
+    ```bash
+    poetry run python -m src.infra.repro
+    ```
+
+Every invocation uses `poetry run` to avoid venv-activation footguns; on Windows
+set `PYTHONIOENCODING=utf-8` in the shell so stage modules can emit unicode logs.
 
 <br>
 
@@ -84,7 +179,7 @@ and [`results/evaluation/comparison/head_to_head_summary.txt`](results/evaluatio
 
 **Key observations**:
 
-* **Best AUC-ROC**: RF tuned (0.7845) edges the 4-model transformer ensemble (0.7819) by 0.26 pp — a gap that is too narrow to resolve on a 4,500-row test set without paired-bootstrap CIs (Phase 8+).
+* **Best AUC-ROC**: RF tuned (0.7845) edges the 4-model transformer ensemble (0.7819) by 0.26 pp. The Phase 12 paired DeLong test returns p=0.023 raw / q=0.23 after BH-FDR — not significant at FDR 0.05. The 4,500-row test split is under-powered for sub-2-pp AUC differences (see [`results/evaluation/significance/power_analysis.csv`](results/evaluation/significance/power_analysis.csv)).
 * **Best F1**: transformer ensemble **0.5491** at τ=0.54 vs RF 0.4642 — an **8.5 pp absolute gap in the transformer's favour**. RF wins accuracy by under-predicting the minority class (RF recall ≈ 0.37 vs transformer recall ≈ 0.55).
 * **MTLM pretraining effect** (Novelty N4): `seed_42_mtlm_finetune` has the **lowest ECE (0.2515) and lowest Brier (0.2061)** of any single model — calibration-direction-consistent with Rubachev et al. (2022); accuracy gains are marginal at this 21 K-row regime as expected.
 * **Generalisation gap**: train ≈ val ≈ test (0–2 pp accuracy gap, ~1–2 pp AUC-ROC gap) — early stopping + dropout + weight decay keep the model firmly in the under-fitting end of the spectrum on the 21 K-row training split.
@@ -99,7 +194,7 @@ Each Section 4 claim maps to a committed artefact. `python -m src.infra.repro` r
 |---|---|---|
 | Transformer ECE 0.26 → 0.011 ± 0.003 after Platt (MTLM seed 0.007; RF native 0.010), AUC unchanged | [`results/evaluation/calibration/calibration_metrics.csv`](results/evaluation/calibration/calibration_metrics.csv) + [`figures/evaluation/calibration/calibration_reliability.png`](figures/evaluation/calibration/calibration_reliability.png) | [`src/evaluation/calibration.py`](src/evaluation/calibration.py) |
 | RF tuned exceeds transformer by 0.008 AUC; not significant at FDR 0.05 (DeLong p=0.023, q=0.23) | [`results/evaluation/significance/pairwise_tests.csv`](results/evaluation/significance/pairwise_tests.csv) | [`src/evaluation/significance.py`](src/evaluation/significance.py) |
-| 4.5K test split has 80% power only for AUC gaps ≥ 0.02 | [`results/evaluation/significance/power_analysis.csv`](results/evaluation/significance/power_analysis.csv) | [`src/evaluation/significance.py`](src/evaluation/significance.py) |
+| Power: detecting a 0.02 AUC gap at α=0.05 / 80% needs ~14,500 rows; 0.005 gap needs ~237,000 — current 4.5K test split is underpowered for the observed gap | [`results/evaluation/significance/power_analysis.csv`](results/evaluation/significance/power_analysis.csv) | [`src/evaluation/significance.py`](src/evaluation/significance.py) |
 | MC-dropout refuse-to-predict: retained AUC 0.779 → 0.850 at 50% abstention | [`results/evaluation/uncertainty/refuse_curve.csv`](results/evaluation/uncertainty/refuse_curve.csv) + [`figures/evaluation/uncertainty/uncertainty_refuse_curve.png`](figures/evaluation/uncertainty/uncertainty_refuse_curve.png) | [`src/evaluation/uncertainty.py`](src/evaluation/uncertainty.py) |
 | Subgroup fairness: Male/Female AUC gap 0.011; EDUCATION "Other" (n=61) flagged underpowered | [`results/evaluation/fairness/subgroup_metrics.csv`](results/evaluation/fairness/subgroup_metrics.csv) + [`figures/evaluation/fairness/fairness_disparity.png`](figures/evaluation/fairness/fairness_disparity.png) | [`src/evaluation/fairness.py`](src/evaluation/fairness.py) |
 | Derivative artefacts regenerate bit-stably | [`results/repro/reproducibility_report.json`](results/repro/reproducibility_report.json) | [`src/infra/repro.py`](src/infra/repro.py) |
@@ -207,18 +302,22 @@ tokeniser ──> embedding ──> encoder (N layers) ──> pool ──> 2-la
 
 ## Repository Structure
 
+The full folder-by-folder / subpackage-by-subpackage guide lives in
+[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md). The tree below is a
+front-page summary.
+
 ```
 credit-default-tabular-transformer/
 │
-├── pyproject.toml              # Poetry configuration and dependencies
+├── pyproject.toml              # Poetry config + dependencies + black / isort / flake8
 ├── poetry.lock                 # Locked dependency versions (Python 3.10–3.12, torch 2.2.x)
 ├── PROJECT_PLAN.md             # 14-phase execution blueprint with novelty register + §21 PDF-requirements audit
 ├── SECURITY_AUDIT.md           # 15-dimension paranoid audit (20 findings, C-1 weights-only closed)
 ├── CHANGELOG.md                # Per-PR / per-commit log of every module + artefact landing
 │
 ├── scripts/
-│   ├── run_pipeline.py         # CLI entry point (EDA, preprocessing, RF benchmark)
-│   └── run_all.py              # Placeholder — end-to-end runner coming in Phase 3B
+│   ├── run_pipeline.py         # CLI entry (EDA, preprocessing, RF benchmark)
+│   └── run_all.py              # One-command end-to-end runner (Option A)
 │
 ├── notebooks/
 │   ├── 01_exploratory_data_analysis.ipynb   # Full EDA with statistical tests
@@ -311,10 +410,10 @@ credit-default-tabular-transformer/
 │
 ├── finance_and_ai_cw___group_project-2.pdf     # Coursework specification (tracked)
 └── docs/
-    ├── ARCHITECTURE.md         # System architecture overview (Phase 3A stub)
-    ├── MODEL_CARD.md           # Mitchell-style model card
-    ├── DATA_SHEET.md           # Gebru-style datasheet
-    ├── REPRODUCIBILITY.md      # Deterministic / approximately deterministic taxonomy
+    ├── ARCHITECTURE.md         # Folder / subpackage / data-flow / novelty-register guide
+    ├── MODEL_CARD.md           # Mitchell-style model card (N12)
+    ├── DATA_SHEET.md           # Gebru-style datasheet (N12)
+    ├── REPRODUCIBILITY.md      # Deterministic / approximately deterministic / stochastic taxonomy
     └── coursework_spec.md      # Markdown transcription of the coursework PDF
 ```
 
@@ -738,6 +837,16 @@ test-set number.
 6. Rubachev, I., et al. (2022). Revisiting Pretraining Objectives for Tabular Deep Learning. *arXiv:2207.03208*. *(Masked-tabular-language-modelling evidence on small datasets.)*
 7. Press, O., Smith, N., & Lewis, M. (2022). Train Short, Test Long: Attention with Linear Biases Enables Input Length Extrapolation. *ICLR*. *(ALiBi — inspires `TemporalDecayBias`, Novelty N3.)*
 8. Lin, T.-Y., et al. (2017). Focal Loss for Dense Object Detection. *ICCV*. *(`FocalLoss` in `src/training/losses.py`.)*
+9. Guo, C., Pleiss, G., Sun, Y., & Weinberger, K.Q. (2017). On Calibration of Modern Neural Networks. *ICML*. *(Temperature scaling + ECE used in `src/evaluation/calibration.py`.)*
+10. Gal, Y. & Ghahramani, Z. (2016). Dropout as a Bayesian Approximation: Representing Model Uncertainty in Deep Learning. *ICML*. *(MC-dropout foundation for `src/evaluation/uncertainty.py`, Novelty N11.)*
+11. Houlsby, N., et al. (2011). Bayesian Active Learning for Classification and Preference Learning. *arXiv:1112.5745*. *(BALD / mutual-information uncertainty signal.)*
+12. DeLong, E.R., DeLong, D.M., & Clarke-Pearson, D.L. (1988). Comparing the Areas under Two or More Correlated Receiver Operating Characteristic Curves. *Biometrics*, 44(3), 837--845. *(Paired AUC test in `src/evaluation/significance.py`.)*
+13. Sun, X. & Xu, W. (2014). Fast Implementation of DeLong's Algorithm for Comparing the Areas Under Correlated Receiver Operating Characteristic Curves. *IEEE Signal Processing Letters*, 21(11), 1389--1393. *(O(N log N) mid-rank structural components used by `delong_auc_test`.)*
+14. Benjamini, Y. & Hochberg, Y. (1995). Controlling the False Discovery Rate: A Practical and Powerful Approach to Multiple Testing. *Journal of the Royal Statistical Society B*, 57(1), 289--300. *(BH-FDR correction in `bh_fdr`.)*
+15. Hanley, J.A. & McNeil, B.J. (1982). The Meaning and Use of the Area under a Receiver Operating Characteristic (ROC) Curve. *Radiology*, 143(1), 29--36. *(Closed-form power in `min_n_for_auc_difference`.)*
+16. Kleinberg, J., Mullainathan, S., & Raghavan, M. (2016). Inherent Trade-Offs in the Fair Determination of Risk Scores. *arXiv:1609.05807*. *(Calibration / DP / EO impossibility used in the fairness discussion — Novelty N10.)*
+17. Mitchell, M., et al. (2019). Model Cards for Model Reporting. *FAT\**. *(Template for `docs/MODEL_CARD.md`, Novelty N12.)*
+18. Gebru, T., et al. (2021). Datasheets for Datasets. *Communications of the ACM*, 64(12), 86--92. *(Template for `docs/DATA_SHEET.md`, Novelty N12.)*
 
 <br>
 

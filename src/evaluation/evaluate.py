@@ -1,7 +1,30 @@
-"""Aggregate per-run artefacts into one transformer-vs-RF comparison table.
-Reuses whatever train.py / random_forest.py already wrote; doesn't recompute.
-Adds kappa + specificity (train.py doesn't emit those). Writes
-comparison_table.{csv,md} and evaluate_summary.json."""
+"""Build the transformer-vs-RF comparison table from committed artefacts.
+
+This module is the glue between the training scripts and the comparison
+row of the report. It does *not* recompute anything expensive: training
+writes ``test_metrics.json`` and ``test_predictions.npz`` in each run
+directory, the RF baseline writes ``rf_metrics.csv`` (and optionally a
+full ``rf/test_predictions.npz``), and this module aggregates them.
+
+Beyond straight aggregation it does three things worth flagging:
+
+* Adds Cohen's kappa and specificity (TN / (TN + FP)) that ``train.py``
+  doesn't emit -- they need the raw probabilities plus the threshold.
+* Collapses multiple seeds into ``mean +/- std`` rows via
+  :func:`aggregate_runs`, and refuses (not silently averages) if
+  ``y_true`` disagrees across runs -- a length mismatch means somebody
+  reshuffled the test split and every downstream number is wrong.
+* Builds an ensemble row from per-seed raw probabilities via
+  :func:`ensemble_run` (arithmetic mean-of-probs or geometric
+  mean-of-logits) so the comparison table has a single headline
+  transformer number.
+
+Outputs live in ``results/evaluation/comparison/``:
+
+* ``comparison_table.csv``  -- columns = [model, *REPORTED_METRICS].
+* ``comparison_table.md``   -- markdown twin for the README / notebook.
+* ``evaluate_summary.json`` -- per-seed breakdown + raw means / stds.
+"""
 
 from __future__ import annotations
 
@@ -15,13 +38,15 @@ import numpy as np
 import pandas as pd
 from sklearn.metrics import cohen_kappa_score, confusion_matrix
 
-from ..training.train import compute_classification_metrics
-
 logger = logging.getLogger(__name__)
 
-# constants
+# ---------------------------------------------------------------------------
+# Constants
+# ---------------------------------------------------------------------------
 
-#: table columns. order: discrimination → threshold → calibration
+#: Column order for the comparison table. Ordering is intentional:
+#: discrimination first (AUC, AP, F1), then threshold-sensitive metrics,
+#: then calibration. The report reads left-to-right top-down.
 REPORTED_METRICS: Tuple[str, ...] = (
     "auc_roc",
     "auc_pr",
@@ -35,21 +60,54 @@ REPORTED_METRICS: Tuple[str, ...] = (
     "brier",
 )
 
-#: columns in rf_metrics.csv. if --rf-predictions is set we compute the
-#: full REPORTED_METRICS set from raw probs instead (CSV lacks ECE/Brier/kappa/spec).
+#: Columns we can expect in ``rf_metrics.csv``. Kappa, specificity, ECE, and
+#: Brier are absent -- those require raw probs, which the CSV doesn't carry.
+#: If ``--rf-predictions`` is set we recompute the full bundle from the npz
+#: and ignore this list entirely.
 _RF_METRIC_COLUMNS: Tuple[str, ...] = (
-    "auc_roc", "auc_pr", "f1", "accuracy", "precision", "recall",
+    "auc_roc",
+    "auc_pr",
+    "f1",
+    "accuracy",
+    "precision",
+    "recall",
 )
 
-#: matches the threshold train.py bakes into test_metrics.json
+#: The threshold baked into ``train.py``'s ``test_metrics.json``. Anything
+#: that recomputes threshold-sensitive numbers (kappa / specificity /
+#: ensembles) needs to use the same value to stay consistent with what
+#: training already reported; overrides are carried per-run in the payload.
 DEFAULT_THRESHOLD: float = 0.5
 
 
+# ---------------------------------------------------------------------------
 # I/O
+# ---------------------------------------------------------------------------
 
 
 def load_test_metrics(run_dir: Path) -> Dict[str, Any]:
-    """load test_metrics.json + test_predictions.npz for one run."""
+    """Read one run's test-split artefacts off disk.
+
+    Parameters
+    ----------
+    run_dir : Path
+        A directory with both ``test_metrics.json`` and
+        ``test_predictions.npz`` (i.e. a finished training run).
+
+    Returns
+    -------
+    dict
+        Keys: ``run_name`` (dir basename), ``metrics`` (from the JSON),
+        ``threshold`` (from JSON or :data:`DEFAULT_THRESHOLD`),
+        ``y_true`` / ``y_prob`` / ``y_pred`` (from the npz).
+
+    Raises
+    ------
+    FileNotFoundError
+        If either artefact is missing; we *want* a hard failure here,
+        not a silently skipped run, because the report would reference
+        a blank row otherwise.
+    """
     run_dir = Path(run_dir)
     metrics_path = run_dir / "test_metrics.json"
     preds_path = run_dir / "test_predictions.npz"
@@ -73,7 +131,11 @@ def load_test_metrics(run_dir: Path) -> Dict[str, Any]:
 
 
 def load_rf_from_predictions(rf_dir: Path) -> Optional[Dict[str, Any]]:
-    """per-row RF preds from rf_predictions.py. None → caller falls back to CSV."""
+    """Read the per-row RF predictions written by ``rf_predictions.py``.
+
+    Returns ``None`` if either artefact is missing, so the caller can
+    fall back to the CSV-only path (fewer columns, calibration blank).
+    """
     rf_dir = Path(rf_dir)
     npz_path = rf_dir / "test_predictions.npz"
     json_path = rf_dir / "test_metrics.json"
@@ -93,8 +155,19 @@ def load_rf_from_predictions(rf_dir: Path) -> Optional[Dict[str, Any]]:
 
 
 def load_rf_metrics(csv_path: Path) -> Dict[str, Dict[str, float]]:
-    """rf_metrics.csv → {rf_baseline, rf_tuned} keyed dict. picks the RF_baseline
-    and RF_tuned rows off the `model` column."""
+    """Extract the RF_baseline / RF_tuned rows from ``rf_metrics.csv``.
+
+    The CSV uses ``avg_precision`` as the column name for AP; we rename
+    to ``auc_pr`` on load so the rest of the module can use a single
+    metric vocabulary.
+
+    Returns
+    -------
+    dict
+        ``{"rf_baseline": {...}, "rf_tuned": {...}}``. Either key may be
+        missing if the corresponding row is absent; this is logged as a
+        warning so the caller knows why a table row is blank.
+    """
     csv_path = Path(csv_path)
     if not csv_path.is_file():
         raise FileNotFoundError(f"Missing {csv_path}")
@@ -102,26 +175,27 @@ def load_rf_metrics(csv_path: Path) -> Dict[str, Dict[str, float]]:
     df = pd.read_csv(csv_path)
     out: Dict[str, Dict[str, float]] = {}
 
-    for display_name, model_key in (("rf_baseline", "RF_baseline"),
-                                     ("rf_tuned", "RF_tuned")):
+    for display_name, model_key in (("rf_baseline", "RF_baseline"), ("rf_tuned", "RF_tuned")):
         match = df[df["model"] == model_key]
         if match.empty:
             logger.warning("No %s row in %s — skipping", model_key, csv_path)
             continue
         row = match.iloc[0]
         out[display_name] = {
-            "auc_roc":   float(row["auc_roc"]),
-            "auc_pr":    float(row["avg_precision"]),
-            "f1":        float(row["f1"]),
-            "accuracy":  float(row["accuracy"]),
+            "auc_roc": float(row["auc_roc"]),
+            "auc_pr": float(row["avg_precision"]),
+            "f1": float(row["f1"]),
+            "accuracy": float(row["accuracy"]),
             "precision": float(row["precision"]),
-            "recall":    float(row["recall"]),
+            "recall": float(row["recall"]),
         }
 
     return out
 
 
-# metrics train.py skips
+# ---------------------------------------------------------------------------
+# Metrics that train.py doesn't emit
+# ---------------------------------------------------------------------------
 
 
 def compute_additional_metrics(
@@ -129,13 +203,24 @@ def compute_additional_metrics(
     y_prob: np.ndarray,
     threshold: float = DEFAULT_THRESHOLD,
 ) -> Dict[str, float]:
-    """κ + specificity @ threshold. train.py doesn't emit either."""
+    """Cohen's kappa + specificity at ``threshold``.
+
+    Both metrics matter for imbalanced classification on this dataset.
+    Specificity (TN rate) is what an operations team reads to estimate
+    the false-positive burden, and kappa corrects accuracy for
+    chance-agreement given the ~22% positive rate.
+
+    The confusion matrix is built with ``labels=[0, 1]`` so a run that
+    never predicts the positive class still returns a full 2x2 instead
+    of a degenerate 1x1 that would raise on ``cm[0, 1]``.
+    """
     y_true_int = y_true.astype(int)
     y_pred = (y_prob >= threshold).astype(int)
 
     kappa = float(cohen_kappa_score(y_true_int, y_pred))
 
-    # spec = TN/(TN+FP). labels=[0,1] avoids 1×1 CM on single-class preds
+    # spec = TN / (TN + FP). Guard against the no-negatives edge case even
+    # though the test split is guaranteed to have both classes.
     cm = confusion_matrix(y_true_int, y_pred, labels=[0, 1])
     tn, fp = cm[0, 0], cm[0, 1]
     specificity = float(tn / (tn + fp)) if (tn + fp) > 0 else float("nan")
@@ -144,15 +229,24 @@ def compute_additional_metrics(
 
 
 def metrics_for_run(run: Dict[str, Any]) -> Dict[str, float]:
-    """train.py bundle + κ + specificity, same threshold throughout."""
+    """Union of ``train.py``'s metric bundle with kappa + specificity.
+
+    Both use the same threshold that ``train.py`` used at test time,
+    carried in ``run['threshold']``; otherwise the threshold-sensitive
+    metrics would disagree between sources.
+    """
     base = dict(run["metrics"])
     extra = compute_additional_metrics(
-        run["y_true"], run["y_prob"], threshold=run["threshold"],
+        run["y_true"],
+        run["y_prob"],
+        threshold=run["threshold"],
     )
     return {**base, **extra}
 
 
-# aggregation across seeds
+# ---------------------------------------------------------------------------
+# Aggregation across seeds
+# ---------------------------------------------------------------------------
 
 
 def ensemble_run(
@@ -162,15 +256,43 @@ def ensemble_run(
     display_name: str = "ensemble",
     threshold: float = DEFAULT_THRESHOLD,
 ) -> Optional[Dict[str, Any]]:
-    """build a synthetic run from mean(probs). arithmetic=mean p, geometric=mean logit.
-    <2 runs → None. Raises if y_true mismatches (would silently corrupt averages)."""
+    """Average per-seed probabilities into a single ensemble run.
+
+    Parameters
+    ----------
+    runs : list of dict
+        Each run must have identical ``y_true`` (checked) -- if any two
+        runs disagree we refuse to average, because the mismatch implies
+        a reshuffle somewhere upstream.
+    mode : {"arithmetic", "geometric"}
+        Arithmetic = mean of probabilities, the standard ensemble. Geometric
+        = mean of logits, equivalent to model averaging at the logit level.
+        Geometric downweights disagreement more aggressively and tends to
+        help when one seed is miscalibrated.
+    display_name : str
+        Name for the ``run_name`` of the synthetic returned run. Doubles
+        as the table row label.
+    threshold : float
+        Threshold for the derived ``y_pred``. Match what the individual
+        seeds used to keep the ensemble comparable.
+
+    Returns
+    -------
+    dict or None
+        ``None`` if fewer than two runs are provided (an ensemble of one
+        is meaningless). Otherwise the standard run-payload dict with an
+        extra ``component_runs`` key listing the seed names.
+
+    Raises
+    ------
+    ValueError
+        If any two runs disagree on ``y_true`` or on ``mode``.
+    """
     if len(runs) < 2:
         return None
     y_true = runs[0]["y_true"]
     for r in runs[1:]:
-        if r["y_true"].shape != y_true.shape or not np.array_equal(
-            r["y_true"], y_true
-        ):
+        if r["y_true"].shape != y_true.shape or not np.array_equal(r["y_true"], y_true):
             raise ValueError(
                 f"Ensemble inputs disagree on y_true "
                 f"({runs[0]['run_name']} vs {r['run_name']}); refusing to average."
@@ -180,6 +302,8 @@ def ensemble_run(
     if mode == "arithmetic":
         y_prob = probs.mean(axis=0)
     elif mode == "geometric":
+        # Logit-mean then sigmoid. Clipping is essential: probs too close to
+        # 0 or 1 send log(p / (1 - p)) to +/- inf and the mean becomes NaN.
         eps = 1e-7
         p = np.clip(probs, eps, 1.0 - eps)
         mean_logit = np.log(p / (1.0 - p)).mean(axis=0)
@@ -188,8 +312,11 @@ def ensemble_run(
         raise ValueError(f"mode must be 'arithmetic' or 'geometric', got {mode!r}")
 
     y_pred = (y_prob >= threshold).astype(int)
-    # reuse train.py's bundle so the ensemble row matches table shape
-    from ..training.train import compute_classification_metrics  # late import ok
+    # Late import: ``compute_classification_metrics`` lives in src.training,
+    # which imports torch. Deferring keeps torch out of the CLI import path
+    # when only the aggregation utilities are used.
+    from ..training.train import compute_classification_metrics
+
     metrics = compute_classification_metrics(y_true, y_prob, threshold=threshold)
 
     return {
@@ -204,24 +331,35 @@ def ensemble_run(
 
 
 def aggregate_runs(runs: List[Dict[str, Any]]) -> Dict[str, Any]:
-    """collapse N single-seed runs → one mean ± std row."""
+    """Collapse N per-seed runs into a single ``mean +/- std`` summary.
+
+    Uses the unbiased sample std (``ddof=1``) when n > 1; returns 0.0
+    for the one-seed case (the fallback keeps the formatter happy but
+    the caller should know the interval is degenerate).
+
+    We deliberately use ``np.mean`` / ``np.std`` rather than ``nanmean``
+    so a NaN on any individual seed propagates into the aggregate. A
+    silent NaN->number conversion is the kind of bug that corrupts a
+    headline number without anyone noticing; a warning plus a visible
+    NaN cell in the CSV forces whoever reruns the pipeline to look.
+    """
     per_seed = [metrics_for_run(r) for r in runs]
     keys = REPORTED_METRICS
 
-    # warn on NaN, but keep mean/std (not nanmean) so the NaN hits the CSV —
-    # silent blanks are worse than obvious NaN
     for k in keys:
         for r, m in zip(runs, per_seed):
             if not np.isfinite(m[k]):
                 logger.warning(
                     "Run %s has NaN %s; aggregate will be NaN",
-                    r["run_name"], k,
+                    r["run_name"],
+                    k,
                 )
 
     mean = {k: float(np.mean([m[k] for m in per_seed])) for k in keys}
-    std = {k: float(np.std([m[k] for m in per_seed], ddof=1))
-           if len(per_seed) > 1 else 0.0
-           for k in keys}
+    std = {
+        k: float(np.std([m[k] for m in per_seed], ddof=1)) if len(per_seed) > 1 else 0.0
+        for k in keys
+    }
 
     return {
         "run_names": [r["run_name"] for r in runs],
@@ -232,11 +370,17 @@ def aggregate_runs(runs: List[Dict[str, Any]]) -> Dict[str, Any]:
     }
 
 
-# table assembly
+# ---------------------------------------------------------------------------
+# Table assembly
+# ---------------------------------------------------------------------------
 
 
 def _format_mean_std(mean: float, std: float, n: int, digits: int = 4) -> str:
-    """'0.7797 ± 0.0022' if n>1 else plain mean."""
+    """Render ``mean +/- std`` for the comparison table cells.
+
+    Drops the ``+/- std`` suffix when n <= 1 so the single-seed rows
+    don't sport a misleading ``+/- 0.0000``.
+    """
     if n <= 1 or std == 0.0:
         return f"{mean:.{digits}f}"
     return f"{mean:.{digits}f} ± {std:.{digits}f}"
@@ -250,12 +394,26 @@ def build_comparison_table(
     ensemble: Optional[Dict[str, Any]] = None,
     rf_full: Optional[Dict[str, Any]] = None,
 ) -> pd.DataFrame:
-    """assemble the comparison table. cols = [model, *REPORTED_METRICS].
-    transformer rows: mean±std. RF tuned uses rf_full probs if present,
-    else CSV (leaves calibration cells as —). ensemble slots between MTLM and RF."""
+    """Assemble the report's model-comparison table.
+
+    Row order (top-down) is deliberate:
+
+    1. Transformer from scratch (mean +/- std across seeds).
+    2. Transformer with MTLM fine-tune (mean +/- std).
+    3. Transformer ensemble (single row, no std; ensemble is deterministic
+       given fixed component seeds).
+    4. RF baseline (from CSV -- calibration columns blank since CSV lacks
+       raw probs).
+    5. RF tuned (full bundle when ``rf_full`` provided, else CSV-only).
+
+    Missing inputs produce skipped rows rather than blanks; the table
+    is meant to be ``cat``-able and copy-pasted into the report.
+    """
     rows: List[Dict[str, Any]] = []
 
     def _blank_row(name: str) -> Dict[str, Any]:
+        # Em-dash placeholder: renders unambiguously in both CSV and
+        # Markdown, and is obviously a gap rather than a 0.
         return {"model": name, **{k: "—" for k in REPORTED_METRICS}}
 
     if transformer_from_scratch is not None:
@@ -284,7 +442,8 @@ def build_comparison_table(
             row[k] = f"{ens_metrics[k]:.4f}"
         rows.append(row)
 
-    # RF baseline: CSV only, no raw preds on disk
+    # RF baseline: CSV is the only source (we don't pickle the baseline
+    # model's predictions, just its headline metrics).
     if "rf_baseline" in rf:
         row = _blank_row("RF (baseline)")
         for k in _RF_METRIC_COLUMNS:
@@ -292,7 +451,8 @@ def build_comparison_table(
                 row[k] = f"{rf['rf_baseline'][k]:.4f}"
         rows.append(row)
 
-    # prefer raw-pred path for RF tuned if available
+    # RF tuned: prefer raw probs if available so the calibration columns
+    # are populated, fall back to CSV otherwise.
     if rf_full is not None:
         rf_metrics = metrics_for_run(rf_full)
         row = {"model": "RF (tuned)"}
@@ -310,7 +470,12 @@ def build_comparison_table(
 
 
 def table_to_markdown(df: pd.DataFrame) -> str:
-    """hand-rolled md table. avoids the optional tabulate dep on to_markdown."""
+    """Render the comparison table as GitHub-flavoured markdown.
+
+    Hand-rolled rather than ``df.to_markdown()`` so we don't depend on
+    the optional ``tabulate`` extra; this lets the module import in a
+    vanilla pandas install.
+    """
     columns = list(df.columns)
     header = "| " + " | ".join(columns) + " |"
     separator = "|" + "|".join(["---"] * len(columns)) + "|"
@@ -320,7 +485,9 @@ def table_to_markdown(df: pd.DataFrame) -> str:
     return "\n".join(lines) + "\n"
 
 
+# ---------------------------------------------------------------------------
 # CLI
+# ---------------------------------------------------------------------------
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -341,8 +508,7 @@ def _build_parser() -> argparse.ArgumentParser:
             "results/transformer/seed_2",
         ],
         type=Path,
-        help="Paths to from-scratch transformer run directories, "
-             "aggregated as mean ± std.",
+        help="Paths to from-scratch transformer run directories, " "aggregated as mean ± std.",
     )
     p.add_argument(
         "--mtlm-runs",
@@ -352,32 +518,43 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Paths to MTLM-fine-tuned run directories, aggregated separately.",
     )
     p.add_argument(
-        "--rf", type=Path, default=Path("results/baseline/rf_metrics.csv"),
+        "--rf",
+        type=Path,
+        default=Path("results/baseline/rf_metrics.csv"),
         help="Path to the RF metrics CSV produced by random_forest.py.",
     )
     p.add_argument(
-        "--rf-predictions", type=Path, default=Path("results/baseline/rf"),
+        "--rf-predictions",
+        type=Path,
+        default=Path("results/baseline/rf"),
         help="Directory with rf test_predictions.npz / test_metrics.json "
-             "(from src/baselines/rf_predictions.py). When present, the RF tuned row "
-             "is computed from raw probabilities rather than the CSV.",
+        "(from src/baselines/rf_predictions.py). When present, the RF tuned row "
+        "is computed from raw probabilities rather than the CSV.",
     )
     p.add_argument(
         "--ensemble-mode",
         choices=("arithmetic", "geometric", "none"),
         default="arithmetic",
         help="Aggregate per-seed from-scratch runs into an ensemble row. "
-             "'none' disables the extra row.",
+        "'none' disables the extra row.",
     )
     p.add_argument(
-        "--output-dir", type=Path, default=Path("results/evaluation/comparison"),
+        "--output-dir",
+        type=Path,
+        default=Path("results/evaluation/comparison"),
         help="Directory to write comparison_table.csv / .md / evaluate_summary.json.",
     )
     return p
 
 
 def _load_all_or_empty(run_dirs: List[Path]) -> List[Dict[str, Any]]:
+    """Load every run dir that actually has artefacts; skip (warn on) the rest.
+
+    argparse defaults don't run ``type=`` conversion, so we re-``Path`` each
+    entry here -- otherwise the default string paths would silently go
+    through ``is_dir`` on the literal string and fail on Windows.
+    """
     out: List[Dict[str, Any]] = []
-    # argparse defaults skip type= conversion → always re-Path here
     for d in run_dirs:
         d = Path(d)
         if not d.is_dir():
@@ -410,21 +587,24 @@ def main(argv: Optional[List[str]] = None) -> int:
             args.rf_predictions,
         )
 
-    transformer_from_scratch = (
-        aggregate_runs(from_scratch_runs) if from_scratch_runs else None
-    )
-    transformer_mtlm = (
-        aggregate_runs(mtlm_runs) if mtlm_runs else None
-    )
+    transformer_from_scratch = aggregate_runs(from_scratch_runs) if from_scratch_runs else None
+    transformer_mtlm = aggregate_runs(mtlm_runs) if mtlm_runs else None
     ensemble = (
-        None if args.ensemble_mode == "none"
-        else ensemble_run(from_scratch_runs, mode=args.ensemble_mode,
-                          display_name=f"ensemble_{args.ensemble_mode}")
+        None
+        if args.ensemble_mode == "none"
+        else ensemble_run(
+            from_scratch_runs,
+            mode=args.ensemble_mode,
+            display_name=f"ensemble_{args.ensemble_mode}",
+        )
     )
 
     table = build_comparison_table(
-        transformer_from_scratch, transformer_mtlm, rf,
-        ensemble=ensemble, rf_full=rf_full,
+        transformer_from_scratch,
+        transformer_mtlm,
+        rf,
+        ensemble=ensemble,
+        rf_full=rf_full,
     )
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
@@ -442,15 +622,21 @@ def main(argv: Optional[List[str]] = None) -> int:
         "rf": rf,
         "rf_full": (
             {"metrics": metrics_for_run(rf_full), "threshold": rf_full["threshold"]}
-            if rf_full is not None else None
+            if rf_full is not None
+            else None
         ),
         "ensemble": (
-            {"metrics": metrics_for_run(ensemble), "mode": args.ensemble_mode,
-             "component_runs": ensemble.get("component_runs", [])}
-            if ensemble is not None else None
+            {
+                "metrics": metrics_for_run(ensemble),
+                "mode": args.ensemble_mode,
+                "component_runs": ensemble.get("component_runs", []),
+            }
+            if ensemble is not None
+            else None
         ),
     }
-    # per_seed holds metric dicts only; raw arrays live in the npz files
+    # Only metric dicts make it into the JSON; the raw probability arrays
+    # stay in their original npz files (too heavy for a summary file).
     json_path.write_text(json.dumps(summary, indent=2, default=str))
 
     logger.info("Comparison table written to %s", csv_path)

@@ -25,32 +25,30 @@ def mixed_batch():
     B = 4
     return {
         "cat_indices": {
-            "SEX":       torch.tensor([0, 1, 0, 1]),
+            "SEX": torch.tensor([0, 1, 0, 1]),
             "EDUCATION": torch.tensor([0, 1, 2, 3]),
-            "MARRIAGE":  torch.tensor([0, 1, 2, 0]),
+            "MARRIAGE": torch.tensor([0, 1, 2, 0]),
         },
-        "pay_state_ids":  torch.tensor(
-            [[0, 1, 2, 3, 3, 3], [3, 3, 2, 1, 0, 0],
-             [2, 2, 2, 2, 2, 2], [0, 0, 0, 3, 3, 3]],
+        "pay_state_ids": torch.tensor(
+            [[0, 1, 2, 3, 3, 3], [3, 3, 2, 1, 0, 0], [2, 2, 2, 2, 2, 2], [0, 0, 0, 3, 3, 3]],
             dtype=torch.long,
         ),
         "pay_severities": torch.tensor(
-            [[0.0, 0.0, 0.0, 0.25, 0.50, 0.75],
-             [1.0, 0.875, 0.0, 0.0, 0.0, 0.0],
-             [0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
-             [0.0, 0.0, 0.0, 0.375, 0.625, 1.0]],
+            [
+                [0.0, 0.0, 0.0, 0.25, 0.50, 0.75],
+                [1.0, 0.875, 0.0, 0.0, 0.0, 0.0],
+                [0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+                [0.0, 0.0, 0.0, 0.375, 0.625, 1.0],
+            ],
             dtype=torch.float,
         ),
         "pay_raw": torch.tensor(
             # raw PAY shifted into [0, 10]: -2→0 … 8→10
-            [[0, 1, 2, 3, 5, 8],
-             [10, 9, 2, 1, 0, 0],
-             [2, 2, 2, 2, 2, 2],
-             [0, 0, 0, 5, 7, 10]],
+            [[0, 1, 2, 3, 5, 8], [10, 9, 2, 1, 0, 0], [2, 2, 2, 2, 2, 2], [0, 0, 0, 5, 7, 10]],
             dtype=torch.long,
         ),
-        "num_values":     torch.randn(B, 14),
-        "label":          torch.tensor([0.0, 1.0, 0.0, 1.0]),
+        "num_values": torch.randn(B, 14),
+        "label": torch.tensor([0.0, 1.0, 0.0, 1.0]),
     }
 
 
@@ -243,8 +241,9 @@ def test_aux_pay0_loss_composable_with_primary_loss(mixed_batch):
         assert p.grad is not None and p.grad.abs().sum().item() > 0
     for _, p in model.classifier.named_parameters():
         assert p.grad is not None and p.grad.abs().sum().item() > 0
-    enc_grads = [p.grad.abs().sum().item() for p in model.encoder.parameters()
-                 if p.grad is not None]
+    enc_grads = [
+        p.grad.abs().sum().item() for p in model.encoder.parameters() if p.grad is not None
+    ]
     assert all(g >= 0 for g in enc_grads) and any(g > 0 for g in enc_grads)
 
 
@@ -272,18 +271,20 @@ def test_load_pretrained_encoder_applies_matching_keys_and_skips_classifier(mixe
 
     with tempfile.TemporaryDirectory() as tmp:
         from src.training.utils import build_checkpoint_metadata, save_checkpoint
+
         ckpt = Path(tmp) / "pretrained.pt"
         save_checkpoint(
-            ckpt, pretrained,
+            ckpt,
+            pretrained,
             metadata=build_checkpoint_metadata(seed=0, extra={"role": "mtlm-pretrain"}),
         )
 
         fresh.load_pretrained_encoder(ckpt)
 
     fresh_encoder_lin = fresh.encoder.blocks[0].attention.W_Q.weight
-    assert torch.allclose(fresh_encoder_lin, pre_encoder_lin, atol=1e-6), (
-        "pretrained encoder weights were not applied"
-    )
+    assert torch.allclose(
+        fresh_encoder_lin, pre_encoder_lin, atol=1e-6
+    ), "pretrained encoder weights were not applied"
 
 
 def test_two_fresh_models_same_seed_produce_identical_logits(mixed_batch):

@@ -89,7 +89,8 @@ def test_transformer_block_attn_bias_is_threaded_to_attention():
 
 def test_transformer_block_independent_dropout_channels():
     block = TransformerBlock(
-        d_model=32, n_heads=4,
+        d_model=32,
+        n_heads=4,
         dropout=0.1,
         attn_dropout=0.3,
         ffn_dropout=0.25,
@@ -123,9 +124,9 @@ def test_transformer_block_in_train_mode_produces_finite_output():
 @pytest.fixture()
 def canonical_layout():
     return {
-        "pay":     {"positions": [4, 5, 6, 7, 8, 9],         "months": [0, 1, 2, 3, 4, 5]},
-        "bill":    {"positions": [12, 13, 14, 15, 16, 17],   "months": [0, 1, 2, 3, 4, 5]},
-        "pay_amt": {"positions": [18, 19, 20, 21, 22, 23],   "months": [0, 1, 2, 3, 4, 5]},
+        "pay": {"positions": [4, 5, 6, 7, 8, 9], "months": [0, 1, 2, 3, 4, 5]},
+        "bill": {"positions": [12, 13, 14, 15, 16, 17], "months": [0, 1, 2, 3, 4, 5]},
+        "pay_amt": {"positions": [18, 19, 20, 21, 22, 23], "months": [0, 1, 2, 3, 4, 5]},
     }
 
 
@@ -172,7 +173,11 @@ def test_temporal_decay_suppresses_distant_month_more_than_near(canonical_layout
     with torch.no_grad():
         decay.alpha.fill_(5.0)
     encoder = TransformerEncoder(
-        d_model=32, n_heads=4, n_layers=2, dropout=0.0, temporal_decay=decay,
+        d_model=32,
+        n_heads=4,
+        n_layers=2,
+        dropout=0.0,
+        temporal_decay=decay,
     )
     encoder.eval()
     x = torch.randn(4, 24, 32)
@@ -187,7 +192,11 @@ def test_temporal_decay_alpha_is_trainable(canonical_layout):
     with torch.no_grad():
         decay.alpha.fill_(0.5)
     encoder = TransformerEncoder(
-        d_model=32, n_heads=4, n_layers=2, dropout=0.0, temporal_decay=decay,
+        d_model=32,
+        n_heads=4,
+        n_layers=2,
+        dropout=0.0,
+        temporal_decay=decay,
     )
     encoder.train()
     x = torch.randn(4, 24, 32)
@@ -241,7 +250,11 @@ def test_encoder_temporal_decay_called_exactly_once_per_forward(canonical_layout
     decay.forward = counted_forward  # type: ignore[assignment]
 
     enc = TransformerEncoder(
-        d_model=32, n_heads=4, n_layers=4, dropout=0.0, temporal_decay=decay,
+        d_model=32,
+        n_heads=4,
+        n_layers=4,
+        dropout=0.0,
+        temporal_decay=decay,
     )
     enc.eval()
     x = torch.randn(2, 24, 32)
@@ -259,7 +272,11 @@ def test_encoder_alpha_receives_gradient_under_stacked_layers(canonical_layout):
     with torch.no_grad():
         decay.alpha.fill_(0.3)
     enc = TransformerEncoder(
-        d_model=32, n_heads=4, n_layers=3, dropout=0.0, temporal_decay=decay,
+        d_model=32,
+        n_heads=4,
+        n_layers=3,
+        dropout=0.0,
+        temporal_decay=decay,
     )
     enc.train()
     x = torch.randn(4, 24, 32)
@@ -276,7 +293,11 @@ def test_encoder_in_train_mode_with_dropout_and_bias_produces_no_nan(canonical_l
     with torch.no_grad():
         decay.alpha.fill_(0.7)
     enc = TransformerEncoder(
-        d_model=32, n_heads=4, n_layers=2, dropout=0.15, temporal_decay=decay,
+        d_model=32,
+        n_heads=4,
+        n_layers=2,
+        dropout=0.15,
+        temporal_decay=decay,
     )
     enc.train()
     x = torch.randn(16, 24, 32)
@@ -288,7 +309,9 @@ def test_encoder_in_train_mode_with_dropout_and_bias_produces_no_nan(canonical_l
 
 def test_encoder_independent_dropout_channels_forwarded():
     enc = TransformerEncoder(
-        d_model=32, n_heads=4, n_layers=2,
+        d_model=32,
+        n_heads=4,
+        n_layers=2,
         dropout=0.1,
         attn_dropout=0.4,
         ffn_dropout=0.3,
@@ -302,7 +325,11 @@ def test_encoder_independent_dropout_channels_forwarded():
 
 def test_encoder_no_temporal_decay_returns_none_bias(canonical_layout):
     enc = TransformerEncoder(
-        d_model=32, n_heads=4, n_layers=2, dropout=0.0, temporal_decay=None,
+        d_model=32,
+        n_heads=4,
+        n_layers=2,
+        dropout=0.0,
+        temporal_decay=None,
     )
     enc.eval()
     x = torch.randn(2, 24, 32)
@@ -318,20 +345,24 @@ def test_encoder_integrates_with_feature_embedding(canonical_layout):
     emb = FeatureEmbedding(d_model=d_model, dropout=0.0)
     decay = TemporalDecayBias(canonical_layout, seq_len=24, mode="scalar")
     enc = TransformerEncoder(
-        d_model=d_model, n_heads=4, n_layers=2, dropout=0.0, temporal_decay=decay,
+        d_model=d_model,
+        n_heads=4,
+        n_layers=2,
+        dropout=0.0,
+        temporal_decay=decay,
     )
 
     B = 4
     batch = {
         "cat_indices": {
-            "SEX":       torch.tensor([0, 1, 0, 1]),
+            "SEX": torch.tensor([0, 1, 0, 1]),
             "EDUCATION": torch.tensor([0, 1, 2, 3]),
-            "MARRIAGE":  torch.tensor([0, 1, 2, 0]),
+            "MARRIAGE": torch.tensor([0, 1, 2, 0]),
         },
-        "pay_state_ids":  torch.zeros(B, 6, dtype=torch.long),
+        "pay_state_ids": torch.zeros(B, 6, dtype=torch.long),
         "pay_severities": torch.zeros(B, 6, dtype=torch.float),
-        "num_values":     torch.randn(B, 14),
-        "label":          torch.tensor([0.0, 1.0, 0.0, 1.0]),
+        "num_values": torch.randn(B, 14),
+        "label": torch.tensor([0.0, 1.0, 0.0, 1.0]),
     }
     emb.train()
     enc.train()
@@ -500,7 +531,11 @@ def test_feature_group_bias_gradient_flows_to_matrix(canonical_group_assignment)
         fgb.bias_matrix.fill_(0.2)
 
     enc = TransformerEncoder(
-        d_model=32, n_heads=4, n_layers=2, dropout=0.0, feature_group_bias=fgb,
+        d_model=32,
+        n_heads=4,
+        n_layers=2,
+        dropout=0.0,
+        feature_group_bias=fgb,
     )
     enc.train()
     x = torch.randn(4, 24, 32)
@@ -511,7 +546,8 @@ def test_feature_group_bias_gradient_flows_to_matrix(canonical_group_assignment)
 
 
 def test_encoder_composes_temporal_decay_and_feature_group_bias(
-    canonical_layout, canonical_group_assignment,
+    canonical_layout,
+    canonical_group_assignment,
 ):
     # composed attn_bias == sum of the two module outputs. with both zero-
     # init, attention matches a plain encoder at the same seed.
@@ -520,7 +556,10 @@ def test_encoder_composes_temporal_decay_and_feature_group_bias(
 
     torch.manual_seed(42)
     enc_plain = TransformerEncoder(
-        d_model=32, n_heads=4, n_layers=2, dropout=0.0,
+        d_model=32,
+        n_heads=4,
+        n_layers=2,
+        dropout=0.0,
     )
     enc_plain.eval()
     _, weights_plain = enc_plain(x)
@@ -533,15 +572,19 @@ def test_encoder_composes_temporal_decay_and_feature_group_bias(
         mode="scalar",
     )
     enc_both = TransformerEncoder(
-        d_model=32, n_heads=4, n_layers=2, dropout=0.0,
-        temporal_decay=decay, feature_group_bias=fgb,
+        d_model=32,
+        n_heads=4,
+        n_layers=2,
+        dropout=0.0,
+        temporal_decay=decay,
+        feature_group_bias=fgb,
     )
     enc_both.eval()
     _, weights_both_zero = enc_both(x)
     for w_plain, w_zero in zip(weights_plain, weights_both_zero):
-        assert torch.allclose(w_plain, w_zero, atol=1e-6), (
-            "zero-initialised biases must leave attention unchanged vs plain encoder"
-        )
+        assert torch.allclose(
+            w_plain, w_zero, atol=1e-6
+        ), "zero-initialised biases must leave attention unchanged vs plain encoder"
 
     with torch.no_grad():
         decay.alpha.fill_(0.3)
@@ -553,19 +596,20 @@ def test_encoder_composes_temporal_decay_and_feature_group_bias(
 
     _, weights_both_active = enc_both(x)
     total_diff = sum(
-        (wa - wz).abs().sum().item()
-        for wa, wz in zip(weights_both_active, weights_both_zero)
+        (wa - wz).abs().sum().item() for wa, wz in zip(weights_both_active, weights_both_zero)
     )
-    assert total_diff > 1e-3, (
-        "activating α and B should measurably shift the attention weights"
-    )
+    assert total_diff > 1e-3, "activating α and B should measurably shift the attention weights"
 
 
 def test_encoder_no_bias_when_both_none():
     # plain path (no biases): pre-N2/N3 behaviour, _compose_attn_bias → None
     enc = TransformerEncoder(
-        d_model=32, n_heads=4, n_layers=2, dropout=0.0,
-        temporal_decay=None, feature_group_bias=None,
+        d_model=32,
+        n_heads=4,
+        n_layers=2,
+        dropout=0.0,
+        temporal_decay=None,
+        feature_group_bias=None,
     )
     enc.eval()
     x = torch.randn(4, 24, 32)

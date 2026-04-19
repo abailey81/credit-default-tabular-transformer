@@ -1,12 +1,17 @@
-"""
-Credit Card Default Prediction — from-scratch tabular transformer + RF benchmark.
+"""Credit Card Default Prediction — from-scratch tabular transformer + RF benchmark.
 
-Architecture layers (bottom-up, matching Plan §§3–8):
+This package is organised bottom-up, mirroring Plan §§3-8. The layering is
+enforced by import direction: data layers never depend on modelling layers,
+and modelling layers never depend on training/evaluation. The only shared
+contract is :mod:`src.tokenization.tokenizer.TOKEN_ORDER` — every consumer
+of the 23-feature sequence routes through it to stay drift-safe.
+
+Architecture layers (bottom-up, matching Plan §§3-8):
 
 Data & preprocessing (:mod:`src.data`, :mod:`src.analysis`)
 -----------------------------------------------------------
 * :mod:`src.data.sources`        — resilient multi-source loader (UCI ML
-                                   Repository API → local manual ``.xls``
+                                   Repository API -> local manual ``.xls``
                                    fallback, with provenance tracking).
 * :mod:`src.data.preprocessing`  — schema normalisation, cleaning,
                                    22-feature engineering, stratified
@@ -45,9 +50,9 @@ Transformer stack (:mod:`src.tokenization`, :mod:`src.models`)
 * :mod:`src.models.model`            — ``TabularTransformer``, the
                                        top-level end-to-end model
                                        (Plan §6.7 / §6.10 / §6.11).
-                                       Wires tokenizer → embedding →
-                                       encoder → pool → classification
-                                       head → logit. Exposes every
+                                       Wires tokenizer -> embedding ->
+                                       encoder -> pool -> classification
+                                       head -> logit. Exposes every
                                        architectural switch (``pool``,
                                        ``use_temporal_pos``,
                                        ``temporal_decay_mode``,
@@ -134,6 +139,11 @@ Training, evaluation, baseline (:mod:`src.training`, :mod:`src.evaluation`, :mod
                                         diffs vs the committed copy.
 
 Every consumer of the raw dataset routes through
-``src.data.sources.build_default_data_source`` so that the API → local
-fallback semantics apply uniformly across the entire pipeline.
+``src.data.sources.build_default_data_source`` so that the API -> local
+fallback semantics apply uniformly across the entire pipeline. If you
+reach for ``pd.read_excel`` or ``ucimlrepo.fetch_ucirepo`` directly, you
+are bypassing the provenance tracking the reproducibility gate expects.
+
+Originally scaffolded across PRs #1-#8 (phases 1-11); the subpackage
+restructure landed on ``feature/restructure-and-polish``.
 """

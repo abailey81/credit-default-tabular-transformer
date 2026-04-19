@@ -19,7 +19,6 @@ REPO = Path(__file__).resolve().parent.parent
 
 from src.evaluation import interpret as interp  # noqa: E402
 
-
 # ──────────────────────────────────────────────────────────────────────────────
 # Synthetic attention fixture
 # ──────────────────────────────────────────────────────────────────────────────
@@ -178,8 +177,7 @@ def test_load_attention_stacks_layers_in_order(tmp_path: Path):
     before layer_2)."""
     rng = np.random.default_rng(42)
     path = tmp_path / "test_attn_weights.npz"
-    tensors = {f"layer_{i}": rng.random((3, 2, 24, 24)).astype(np.float32)
-               for i in range(3)}
+    tensors = {f"layer_{i}": rng.random((3, 2, 24, 24)).astype(np.float32) for i in range(3)}
     np.savez_compressed(path, **tensors)
 
     loaded = interp.load_attention(tmp_path)
@@ -205,12 +203,18 @@ def test_main_end_to_end(tmp_path: Path):
             "--no-save-attn to generate it."
         )
 
-    rc = interp.main([
-        "--run-dir", str(seed_42),
-        "--rf-importance", str(REPO / "results" / "baseline" / "rf_feature_importance.csv"),
-        "--figures-dir", str(tmp_path / "figures"),
-        "--output-json", str(tmp_path / "interpret.json"),
-    ])
+    rc = interp.main(
+        [
+            "--run-dir",
+            str(seed_42),
+            "--rf-importance",
+            str(REPO / "results" / "baseline" / "rf_feature_importance.csv"),
+            "--figures-dir",
+            str(tmp_path / "figures"),
+            "--output-json",
+            str(tmp_path / "interpret.json"),
+        ]
+    )
     assert rc == 0
 
     for name in (

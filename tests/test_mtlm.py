@@ -9,8 +9,17 @@ import torch
 
 from src.models.model import TabularTransformer  # noqa: E402
 from src.models.mtlm import MTLMHead, MTLMLossComponents, MTLMModel, mtlm_loss  # noqa: E402
-from src.models.transformer import FeatureGroupBias, TemporalDecayBias, TransformerEncoder  # noqa: E402
-from src.tokenization.embedding import FeatureEmbedding, N_FEATURE_GROUPS, build_group_assignment, build_temporal_layout  # noqa: E402
+from src.models.transformer import (  # noqa: E402
+    FeatureGroupBias,
+    TemporalDecayBias,
+    TransformerEncoder,
+)
+from src.tokenization.embedding import (  # noqa: E402
+    N_FEATURE_GROUPS,
+    FeatureEmbedding,
+    build_group_assignment,
+    build_temporal_layout,
+)
 from src.tokenization.tokenizer import (  # noqa: E402
     CATEGORICAL_FEATURES,
     NUMERICAL_FEATURES,
@@ -35,21 +44,18 @@ def mtlm_batch() -> Dict[str, Any]:
     mask[3, 9] = True
     return {
         "cat_indices": {
-            "SEX":       torch.tensor([0, 1, 0, 1]),
+            "SEX": torch.tensor([0, 1, 0, 1]),
             "EDUCATION": torch.tensor([0, 1, 2, 3]),
-            "MARRIAGE":  torch.tensor([0, 1, 2, 0]),
+            "MARRIAGE": torch.tensor([0, 1, 2, 0]),
         },
-        "pay_state_ids":  torch.zeros(B, 6, dtype=torch.long),
+        "pay_state_ids": torch.zeros(B, 6, dtype=torch.long),
         "pay_severities": torch.zeros(B, 6, dtype=torch.float),
-        "pay_raw":        torch.tensor(
-            [[2, 2, 2, 2, 2, 2],
-             [5, 2, 2, 2, 2, 2],
-             [0, 0, 0, 0, 0, 10],
-             [2, 2, 2, 2, 2, 2]],
+        "pay_raw": torch.tensor(
+            [[2, 2, 2, 2, 2, 2], [5, 2, 2, 2, 2, 2], [0, 0, 0, 0, 0, 10], [2, 2, 2, 2, 2, 2]],
             dtype=torch.long,
         ),
-        "num_values":     torch.randn(B, 14),
-        "label":          torch.tensor([0.0, 1.0, 0.0, 1.0]),
+        "num_values": torch.randn(B, 14),
+        "label": torch.tensor([0.0, 1.0, 0.0, 1.0]),
         "mask_positions": mask,
     }
 
@@ -146,7 +152,8 @@ def test_mtlm_loss_empty_mask_returns_zero(tiny_cat_vocab_sizes, mtlm_batch):
 
 
 def test_mtlm_loss_entropy_normalised_within_cross_entropy_bounds(
-    tiny_cat_vocab_sizes, mtlm_batch,
+    tiny_cat_vocab_sizes,
+    mtlm_batch,
 ):
     # uniform preds lose ln(n) nats/feature, so CE / ln(n_cats) ≈ 1.0
     torch.manual_seed(0)
@@ -163,7 +170,8 @@ def test_mtlm_loss_entropy_normalised_within_cross_entropy_bounds(
 
 
 def test_mtlm_loss_variance_normalisation_on_numerical(
-    tiny_cat_vocab_sizes, mtlm_batch,
+    tiny_cat_vocab_sizes,
+    mtlm_batch,
 ):
     head = MTLMHead(d_model=32, cat_vocab_sizes=tiny_cat_vocab_sizes)
     hidden = torch.randn(4, 24, 32)
@@ -171,22 +179,29 @@ def test_mtlm_loss_variance_normalisation_on_numerical(
 
     variance_1 = {feat: 1.0 for feat in NUMERICAL_FEATURES}
     variance_4 = {feat: 4.0 for feat in NUMERICAL_FEATURES}
-    _, c1 = mtlm_loss(predictions, mtlm_batch, mtlm_batch["mask_positions"],
-                      num_feature_variance=variance_1)
-    _, c4 = mtlm_loss(predictions, mtlm_batch, mtlm_batch["mask_positions"],
-                      num_feature_variance=variance_4)
+    _, c1 = mtlm_loss(
+        predictions, mtlm_batch, mtlm_batch["mask_positions"], num_feature_variance=variance_1
+    )
+    _, c4 = mtlm_loss(
+        predictions, mtlm_batch, mtlm_batch["mask_positions"], num_feature_variance=variance_4
+    )
     assert c4.num == pytest.approx(c1.num / 4.0, rel=1e-4)
 
 
 def _build_mtlm_model(d_model: int = 32, n_heads: int = 4, n_layers: int = 2) -> MTLMModel:
     cat_vocab_sizes = {"SEX": 2, "EDUCATION": 4, "MARRIAGE": 3}
     emb = FeatureEmbedding(
-        d_model=d_model, dropout=0.0,
+        d_model=d_model,
+        dropout=0.0,
         cat_vocab_sizes=cat_vocab_sizes,
-        use_temporal_pos=False, use_mask_token=True,
+        use_temporal_pos=False,
+        use_mask_token=True,
     )
     enc = TransformerEncoder(
-        d_model=d_model, n_heads=n_heads, n_layers=n_layers, dropout=0.0,
+        d_model=d_model,
+        n_heads=n_heads,
+        n_layers=n_layers,
+        dropout=0.0,
     )
     head = MTLMHead(d_model=d_model, cat_vocab_sizes=cat_vocab_sizes)
     return MTLMModel(emb, enc, head)
@@ -232,16 +247,16 @@ def test_tabular_transformer_loads_mtlm_encoder_state_dict(tmp_path):
 
     torch.manual_seed(42)
     tabular = TabularTransformer(
-        d_model=32, n_heads=4, n_layers=2,
+        d_model=32,
+        n_heads=4,
+        n_layers=2,
         cat_vocab_sizes=cat_vocab_sizes,
     )
     head_w_before = tabular.classifier[0].weight.detach().clone()
 
     tabular.load_pretrained_encoder(path, strict=False)
 
-    assert torch.allclose(
-        tabular.encoder.blocks[0].attention.W_Q.weight, mtlm_qweight, atol=1e-6
-    )
+    assert torch.allclose(tabular.encoder.blocks[0].attention.W_Q.weight, mtlm_qweight, atol=1e-6)
     assert torch.allclose(tabular.embedding.cls_token, mtlm_emb_cls, atol=1e-6)
     assert torch.allclose(tabular.classifier[0].weight, head_w_before, atol=1e-6)
 

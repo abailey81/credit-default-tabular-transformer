@@ -10,8 +10,9 @@ import pytest
 
 REPO = Path(__file__).resolve().parent.parent
 
-from src.evaluation import significance as sig  # noqa: E402
 from sklearn.metrics import roc_auc_score
+
+from src.evaluation import significance as sig  # noqa: E402
 
 
 def test_mcnemar_identical_predictions_p_is_one():
@@ -73,8 +74,13 @@ def test_paired_bootstrap_ci_brackets_observed():
     p_a = rng.uniform(0, 1, size=n)
     p_b = rng.uniform(0, 1, size=n)
     r = sig.paired_bootstrap(
-        y, lambda y, p: float(roc_auc_score(y, p)),
-        p_a, p_b, n_resamples=200, seed=0, metric_name="auc_roc",
+        y,
+        lambda y, p: float(roc_auc_score(y, p)),
+        p_a,
+        p_b,
+        n_resamples=200,
+        seed=0,
+        metric_name="auc_roc",
     )
     assert r.ci_low <= r.effect <= r.ci_high
     assert 0.0 <= r.p_value <= 1.0
@@ -86,8 +92,13 @@ def test_paired_bootstrap_zero_effect_large_p():
     y = rng.integers(0, 2, size=n)
     p = rng.uniform(0, 1, size=n)
     r = sig.paired_bootstrap(
-        y, lambda y, p: float(roc_auc_score(y, p)),
-        p, p, n_resamples=200, seed=0, metric_name="auc_roc",
+        y,
+        lambda y, p: float(roc_auc_score(y, p)),
+        p,
+        p,
+        n_resamples=200,
+        seed=0,
+        metric_name="auc_roc",
     )
     assert r.p_value > 0.5
     assert abs(r.effect) < 1e-12
@@ -116,9 +127,7 @@ def test_bh_fdr_q_values_monotone_in_p_rank():
 def test_min_n_for_auc_difference_scales_with_gap():
     n_small = sig.min_n_for_auc_difference(0.785, 0.78, prevalence=0.22)
     n_big = sig.min_n_for_auc_difference(0.80, 0.78, prevalence=0.22)
-    assert n_small > n_big, (
-        f"Smaller effect should need more N: n_small={n_small}, n_big={n_big}"
-    )
+    assert n_small > n_big, f"Smaller effect should need more N: n_small={n_small}, n_big={n_big}"
 
 
 def test_min_n_for_auc_difference_infinite_on_identical():
@@ -130,9 +139,12 @@ def test_run_all_pairs_on_committed(tmp_path):
     seed_42 = REPO / "results" / "transformer" / "seed_42"
     seed_1 = REPO / "results" / "transformer" / "seed_1"
     rf = REPO / "results" / "baseline" / "rf"
-    if not all((seed_42 / "test_predictions.npz").is_file()
-               for p in [seed_42, seed_1, rf]
-               for _ in [p]) or not (rf / "test_predictions.npz").is_file():
+    if (
+        not all(
+            (seed_42 / "test_predictions.npz").is_file() for p in [seed_42, seed_1, rf] for _ in [p]
+        )
+        or not (rf / "test_predictions.npz").is_file()
+    ):
         pytest.skip("committed predictions missing")
     loaded = [sig._load_run(seed_42), sig._load_run(seed_1), sig._load_run(rf)]
     loaded = [r for r in loaded if r is not None]

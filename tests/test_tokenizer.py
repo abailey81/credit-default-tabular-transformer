@@ -11,14 +11,14 @@ from src.tokenization.tokenizer import (  # noqa: E402
     CATEGORICAL_FEATURES,
     MAX_PAY_DELAY,
     NUMERICAL_FEATURES,
-    PAY_STATUS_FEATURES,
     PAY_STATE_DELINQUENT,
     PAY_STATE_MINIMUM,
     PAY_STATE_NO_BILL,
     PAY_STATE_PAID_FULL,
-    PAYValueError,
+    PAY_STATUS_FEATURES,
     CreditDefaultDataset,
     MTLMCollator,
+    PAYValueError,
     build_categorical_vocab,
     build_numerical_vocab,
     encode_pay_value,
@@ -32,10 +32,10 @@ from src.tokenization.tokenizer import (  # noqa: E402
     [
         (-2, (PAY_STATE_NO_BILL, 0.0)),
         (-1, (PAY_STATE_PAID_FULL, 0.0)),
-        (0,  (PAY_STATE_MINIMUM, 0.0)),
-        (1,  (PAY_STATE_DELINQUENT, 1 / 8)),
-        (4,  (PAY_STATE_DELINQUENT, 4 / 8)),
-        (8,  (PAY_STATE_DELINQUENT, 1.0)),
+        (0, (PAY_STATE_MINIMUM, 0.0)),
+        (1, (PAY_STATE_DELINQUENT, 1 / 8)),
+        (4, (PAY_STATE_DELINQUENT, 4 / 8)),
+        (8, (PAY_STATE_DELINQUENT, 1.0)),
     ],
 )
 def test_encode_pay_value_in_range(pay, expected):
@@ -130,9 +130,7 @@ def test_mtlm_collator_output_shape(small_dataset):
 
 def test_mtlm_collator_respects_min_max(small_dataset):
     batch = [small_dataset[i] for i in range(32)]
-    collator = MTLMCollator(
-        mask_prob=0.15, min_mask_per_row=2, max_mask_per_row=4, seed=0
-    )
+    collator = MTLMCollator(mask_prob=0.15, min_mask_per_row=2, max_mask_per_row=4, seed=0)
     out = collator(batch)
     counts = out["mask_positions"].sum(dim=1)
     assert (counts >= 2).all()

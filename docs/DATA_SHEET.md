@@ -72,7 +72,9 @@ threshold-based decision.
 ## Distribution
 
 Source: UCI ML Repository dataset 350. License: CC BY 4.0. Raw `.xls`
-tracked under `data/raw/` per UCI redistribution policy.
+tracked under `data/raw/` per UCI redistribution policy. The pipeline
+that consumes this file lives under `src/data/` — see
+`docs/ARCHITECTURE.md` for the full folder layout.
 
 ## Maintenance
 

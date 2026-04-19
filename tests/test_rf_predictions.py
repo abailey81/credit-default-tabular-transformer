@@ -16,9 +16,12 @@ from src.baselines import rf_predictions as rf  # noqa: E402
 
 def test_coerce_best_params_handles_stringified_types():
     raw = {
-        "n_estimators": "200", "max_depth": "None",
-        "min_samples_split": "2", "max_features": "sqrt",
-        "ccp_alpha": "0.01", "class_weight": "balanced",
+        "n_estimators": "200",
+        "max_depth": "None",
+        "min_samples_split": "2",
+        "max_features": "sqrt",
+        "ccp_alpha": "0.01",
+        "class_weight": "balanced",
     }
     out = rf._coerce_best_params(raw)
     assert out["n_estimators"] == 200
@@ -39,9 +42,7 @@ def test_fit_and_predict_tiny(tmp_path):
     rng = np.random.default_rng(0)
     n = 400
     cols = ["LIMIT_BAL", "AGE", "PAY_0", "PAY_AMT1", "BILL_AMT1", "DEFAULT"]
-    df = pd.DataFrame({
-        c: rng.normal(size=n) for c in cols[:-1]
-    })
+    df = pd.DataFrame({c: rng.normal(size=n) for c in cols[:-1]})
     df["DEFAULT"] = rng.binomial(1, 0.25, size=n)
 
     data_dir = tmp_path / "data"
@@ -52,8 +53,10 @@ def test_fit_and_predict_tiny(tmp_path):
 
     cfg = {
         "best_params": {
-            "n_estimators": "20", "max_depth": "4",
-            "min_samples_split": "2", "min_samples_leaf": "1",
+            "n_estimators": "20",
+            "max_depth": "4",
+            "min_samples_split": "2",
+            "min_samples_leaf": "1",
         },
         "best_threshold": 0.5,
     }
@@ -98,9 +101,14 @@ def test_main_against_committed_data():
         pytest.skip("no committed rf_config or engineered data")
     # scratch dir — leave committed results/rf alone
     import tempfile
+
     with tempfile.TemporaryDirectory() as tmp:
-        rc = rf.main([
-            "--config", str(cfg),
-            "--output-dir", str(Path(tmp) / "rf"),
-        ])
+        rc = rf.main(
+            [
+                "--config",
+                str(cfg),
+                "--output-dir",
+                str(Path(tmp) / "rf"),
+            ]
+        )
         assert rc == 0

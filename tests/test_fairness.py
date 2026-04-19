@@ -79,13 +79,20 @@ def test_main_end_to_end(tmp_path):
     test_raw = REPO / "data" / "processed" / "test_raw.csv"
     if not (seed_42 / "test_predictions.npz").is_file() or not test_raw.is_file():
         pytest.skip("no committed transformer runs or preprocessing")
-    rc = fa.main([
-        "--runs", str(seed_42),
-        "--rf-dir", str(REPO / "results" / "baseline" / "rf"),
-        "--test-raw", str(test_raw),
-        "--output-dir", str(tmp_path / "out"),
-        "--figures-dir", str(tmp_path / "fig"),
-    ])
+    rc = fa.main(
+        [
+            "--runs",
+            str(seed_42),
+            "--rf-dir",
+            str(REPO / "results" / "baseline" / "rf"),
+            "--test-raw",
+            str(test_raw),
+            "--output-dir",
+            str(tmp_path / "out"),
+            "--figures-dir",
+            str(tmp_path / "fig"),
+        ]
+    )
     assert rc == 0
     assert (tmp_path / "out" / "subgroup_metrics.csv").is_file()
     df = pd.read_csv(tmp_path / "out" / "subgroup_metrics.csv")

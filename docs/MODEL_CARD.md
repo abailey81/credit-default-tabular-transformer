@@ -71,9 +71,11 @@ FDR 0.05. McNemar on τ=0.5 accuracy differences *is* significant — the
 two models trade sensitivity for specificity differently at that
 threshold.
 
-Power: the 4,500-row test split has 80 % power to detect an AUC gap of
-0.02 at α = 0.05. A 0.005 gap would need ~240,000 rows. The observed
-RF-vs-transformer gap sits inside the noise band on this test set.
+Power: on this 4,500-row test split, detecting an AUC gap of 0.02 at
+α = 0.05 / 80 % power would need ~14,500 rows (Hanley-McNeil); a 0.005
+gap needs ~237,000. The observed RF-vs-transformer gap (0.008) sits
+inside the noise band on this test set. Source:
+`results/evaluation/significance/power_analysis.csv`.
 
 ## Calibration
 
@@ -135,8 +137,10 @@ C-1); `trust_source=True` only applies to our own bundles.
 
 ## Reproducibility
 
-See `docs/REPRODUCIBILITY.md` + `src/infra/repro.py`. Every derivative
-artefact (`evaluation/comparison/comparison_table.csv`,
+See `docs/REPRODUCIBILITY.md` for the full deterministic / stochastic
+taxonomy and `docs/ARCHITECTURE.md` for the folder layout that these
+paths live under. Every derivative artefact
+(`evaluation/comparison/comparison_table.csv`,
 `baseline/rf/test_predictions.npz`, every CSV under
 `results/evaluation/calibration/`, `results/evaluation/fairness/`,
 `results/evaluation/uncertainty/`, `results/evaluation/significance/`)

@@ -34,7 +34,75 @@ Contributors (alphabetical by GitHub handle):
 
 ---
 
-## [Unreleased] — `feature/restructure-and-polish`
+## [Unreleased] — `feature/restructure-and-polish` (documentation + polish pass)
+
+Second pass on `feature/restructure-and-polish`: the restructure
+itself landed in the 0.15.0 block below; this Unreleased covers the
+professional documentation pass, the one-command runner, and the
+lint / formatter tooling that together take the repo from "restructured"
+to "submission-ready".
+
+### Added — Documentation pass (Phase 3A)
+
+- New `docs/ARCHITECTURE.md` — 300+ line architecture guide with
+  folder-by-folder and subpackage-by-subpackage purpose, a
+  textual data-flow diagram, a novelty-register cross reference
+  (N1-N13 mapped to source files), a report-section-to-file map
+  (§3.x and §4.x of the coursework report), and an
+  "how to add a new feature" playbook.
+- Detailed human-style docstrings and inline comments restored across
+  every subpackage under `src/` (~3,800 lines total): `src/data/*`,
+  `src/tokenization/*`, `src/models/*`, `src/training/*`,
+  `src/baselines/*`, `src/evaluation/*`, `src/analysis/*`,
+  `src/infra/*`. Every public function now carries a one-paragraph
+  docstring and load-bearing lines carry rationale comments.
+- `README.md` updated: Overview reflects Section-4-complete state
+  (calibration / fairness / UQ / significance / interpretability all
+  shipped); Repository Structure rewritten for the new subpackage
+  layout with links into `docs/ARCHITECTURE.md`; Section-4 evidence
+  pack paths re-verified; references list completed (Vaswani,
+  Gorishniy, Guo, Gal+Ghahramani, Houlsby, DeLong, Sun+Xu, BH,
+  Hanley+McNeil, KMR, Mitchell, Gebru, Lin+, Yeh+Lien); placeholder
+  Quick Start added for Phase 3B to fill.
+- `docs/MODEL_CARD.md` corrected: the power paragraph now matches
+  `results/evaluation/significance/power_analysis.csv` (detecting a
+  0.02 AUC gap at α = 0.05 / 80 % power needs ~14,500 rows on this
+  prevalence, not 4,500); cross-reference to `docs/ARCHITECTURE.md`
+  added in the Reproducibility section.
+- `docs/DATA_SHEET.md`: Distribution paragraph now cross-references
+  `docs/ARCHITECTURE.md` for the `src/data/` layout.
+- `docs/REPRODUCIBILITY.md`: new opening paragraph pointing at
+  `docs/ARCHITECTURE.md` for the folder layout; new "Running
+  everything" section documenting Option A (`scripts/run_all.py`) and
+  Option B (`python -m src.*` CLIs) with `src.infra.repro` as the
+  one-line verification.
+
+### Added — One-command run (Phase 3B)
+
+- New `scripts/run_all.py` executes the full pipeline end-to-end
+  (preprocessing → EDA → RF benchmark → transformer training 3 seeds
+  + MTLM fine-tune → evaluation pack → reproducibility gate) in a
+  single `poetry run python scripts/run_all.py` invocation. All the
+  underlying `python -m src.<pkg>.<mod>` CLIs remain the canonical
+  entry points (Option B) — `run_all.py` just chains them in order.
+
+### Added — Lint / formatter (Phase 3C)
+
+- `pyproject.toml` gains a `[tool.black]`, `[tool.isort]`, and
+  `[tool.flake8]` block. Formatter: `poetry run black src tests
+  scripts`. Imports: `poetry run isort src tests scripts`. Linter:
+  `poetry run flake8 src tests scripts`. No code semantics changed —
+  the pass is strictly cosmetic + import ordering + long-line fixes.
+
+### Verification
+
+`python -m src.infra.repro` still **7/7 PASS** on a clean tree;
+`pytest tests/ -q` still **316 passed**. Restructure + docs +
+run_all + lint together did not regress a single CSV or figure.
+
+---
+
+## [0.15.0] — 2026-04-18 — `feature/restructure-and-polish` (layout pass)
 
 Repository restructure: the flat `src/` layout is reorganised into
 professional subpackages (`src/data`, `src/analysis`, `src/tokenization`,
@@ -53,6 +121,8 @@ the **316-test pytest suite** is unchanged. No function names, class
 names, argparse flags, or artefact contents were modified — the change
 is strictly a layout + imports + path-defaults pass.
 
+Contributor: Tamer Atesyakar.
+
 ---
 
 ## [0.14.0] — `feature/phase-11-12-14`
@@ -62,7 +132,7 @@ Phase 11 (calibration), 11A (fairness, N10), 11B (uncertainty, N11), 12
 N12), plus Phase 8 post-review items. Section 4 of the plan is now
 backed by committed CSVs, figures, and a regeneration harness.
 
-### Added — Phase 11: post-hoc calibration (`src/calibration.py`, ~560 LOC)
+### Added — Phase 11: post-hoc calibration (`src/evaluation/calibration.py`, ~560 LOC)
 
 - `TemperatureScaling`, `PlattScaling`, `IsotonicCalibrator` + an
   `IdentityCalibrator` baseline, all sharing `fit(y_val, p_val) →
@@ -72,9 +142,9 @@ backed by committed CSVs, figures, and a regeneration harness.
 - ECE (equal-width + equal-mass), MCE, Brier decomposition
   (Murphy 1973: reliability − resolution + uncertainty), Brier skill.
 - CLI fits every calibrator on each run's val, scores on test, writes
-  `results/calibration/calibration_metrics.csv`,
-  `figures/calibration_reliability.png`,
-  `figures/calibration_ece_bar.png`.
+  `results/evaluation/calibration/calibration_metrics.csv`,
+  `figures/evaluation/calibration/calibration_reliability.png`,
+  `figures/evaluation/calibration/calibration_ece_bar.png`.
 - Raw transformer ECE 0.26 → 0.011 ± 0.003 post-Platt (range 0.007–0.013
   across the four runs; MTLM seed 0.007). AUC unchanged; matches the
   RF's 0.010.
@@ -82,7 +152,7 @@ backed by committed CSVs, figures, and a regeneration harness.
   and mis-calibrated fixtures, isotonic monotonicity, Brier-decomposition
   identity, e2e against committed `seed_42` artefacts.
 
-### Added — Phase 11A: subgroup fairness audit (N10; `src/fairness.py`, ~500 LOC)
+### Added — Phase 11A: subgroup fairness audit (N10; `src/evaluation/fairness.py`, ~500 LOC)
 
 - `SubgroupMetrics` + `audit_attribute()`: per-subgroup n, base rate,
   selection rate, TPR, FPR, AUC, ECE, Brier.
@@ -90,13 +160,13 @@ backed by committed CSVs, figures, and a regeneration harness.
   equalised-odds violation, AUC/ECE disparity. Reference subgroup is
   the largest by n.
 - Subgroups with n < 50 → `underpowered=True` rather than silently dropped.
-- Plots: `figures/fairness_disparity.png` +
-  `figures/fairness_reliability_{sex,education,marriage}.png`.
+- Plots: `figures/evaluation/fairness/fairness_disparity.png` +
+  `figures/evaluation/fairness/fairness_reliability_{sex,education,marriage}.png`.
 - Male vs Female demographic-parity Δ = +0.02. EDUCATION "Other" (n=61)
   drops 0.19–0.31 AUC → flagged, not reported.
 - Tests — `tests/test_fairness.py`, 7 cases, 92% cov.
 
-### Added — Phase 11B: MC-dropout uncertainty (N11; `src/uncertainty.py`, ~470 LOC)
+### Added — Phase 11B: MC-dropout uncertainty (N11; `src/evaluation/uncertainty.py`, ~470 LOC)
 
 - `enable_dropout()` flips only `nn.Dropout*` submodules to train mode;
   LayerNorm γ/β stay fixed.
@@ -106,14 +176,14 @@ backed by committed CSVs, figures, and a regeneration harness.
   aleatoric entropy, mutual information (BALD).
 - `refuse_curve()`: accuracy + AUC on the retained subset as abstention
   grows. Ranking signal ∈ {predictive_entropy, mutual_info, std}.
-- CLI writes `results/uncertainty/mc_dropout.npz` (per-row arrays +
+- CLI writes `results/evaluation/uncertainty/mc_dropout.npz` (per-row arrays +
   raw (T, N) probabilities), `uncertainty_summary.json`,
-  `refuse_curve.csv`, `figures/uncertainty_refuse_curve.png`,
-  `figures/uncertainty_entropy_hist.png`.
+  `refuse_curve.csv`, `figures/evaluation/uncertainty/uncertainty_refuse_curve.png`,
+  `figures/evaluation/uncertainty/uncertainty_entropy_hist.png`.
 - Deferring top 50% most-uncertain: retained AUC 0.779 → 0.850.
 - Tests — `tests/test_uncertainty.py`, 7 cases, 95% cov.
 
-### Added — Phase 12: significance testing (`src/significance.py`, ~610 LOC)
+### Added — Phase 12: significance testing (`src/evaluation/significance.py`, ~610 LOC)
 
 - `mcnemar_test()`: exact binomial on small discordant counts, chi-sq
   with continuity correction otherwise.
@@ -124,18 +194,18 @@ backed by committed CSVs, figures, and a regeneration harness.
 - `bh_fdr()`: Benjamini-Hochberg q-values + rejection mask, per
   (test, metric) family.
 - `min_n_for_auc_difference()`: Hanley-McNeil closed-form power.
-- Pairwise CLI writes `results/significance/pairwise_tests.csv`,
-  `power_analysis.csv`, `figures/significance_pvalue_heatmap.png`.
+- Pairwise CLI writes `results/evaluation/significance/pairwise_tests.csv`,
+  `power_analysis.csv`, `figures/evaluation/significance/significance_pvalue_heatmap.png`.
 - DeLong RF-vs-transformer AUC: p = 0.023 raw, q = 0.23 after BH over
   15 pairs. 4,500-row test split has 80% power only for AUC gaps ≥ 0.02.
 - Tests — `tests/test_significance.py`, 14 cases, 69% cov on CLI + plotting.
 
-### Added — Phase 14A: reproducibility harness (`src/repro.py`, ~340 LOC)
+### Added — Phase 14A: reproducibility harness (`src/infra/repro.py`, ~340 LOC)
 
 - Six-check regeneration report: artefact presence, transformer run
   files, python/torch pins, git-tree status, RF-prediction bit-parity,
-  `evaluate.py` bit-parity.
-- `python src/repro.py` exits 0 when every derivative artefact matches
+  `src.evaluation.evaluate` bit-parity.
+- `python -m src.infra.repro` exits 0 when every derivative artefact matches
   its committed copy at `rtol=1e-4, atol=1e-6`. CI gate.
 - `docs/REPRODUCIBILITY.md` classes each artefact as bit-stable,
   approximately deterministic, or stochastic by design.
@@ -151,16 +221,16 @@ backed by committed CSVs, figures, and a regeneration harness.
 
 ### Added — Post-PR #12 review items
 
-- `src/rf_predictions.py` refits the tuned RF from committed
+- `src/baselines/rf_predictions.py` refits the tuned RF from committed
   `rf_config.json`, persists per-row test probabilities in train.py's
   NPZ layout. Bit-stable vs committed (max |Δp| = 0.0). Feeds
   calibration / fairness / significance.
-- `src/evaluate.py`: `ensemble_run()` for arithmetic or
+- `src/evaluation/evaluate.py`: `ensemble_run()` for arithmetic or
   geometric-mean-of-logit ensembles; `load_rf_from_predictions()`
   prefers the raw RF probability vector over the aggregate CSV so the
   RF-tuned row can report ECE / Brier / kappa / specificity. New
   `--rf-predictions` + `--ensemble-mode` flags.
-- `results/comparison_table.csv`: adds a `Transformer ensemble
+- `results/evaluation/comparison/comparison_table.csv`: adds a `Transformer ensemble
   (arithmetic, n=3)` row + RF-tuned row with every metric in
   `REPORTED_METRICS`.
 - Tests — `tests/test_evaluate_ensemble.py` (7) + `tests/test_rf_predictions.py`
@@ -187,7 +257,7 @@ Phase 6B (Novelty N5 multi-task infrastructure, already wired), Phase 7
 
 ### Added — Phase 6A (Novelty N4): Masked Tabular Language Modelling pretraining
 
-- **`src/mtlm.py`** *(new, ~420 LOC)* — the flagship "language-model"
+- **`src/models/mtlm.py`** *(new, ~420 LOC)* — the flagship "language-model"
   novelty, directly answering the coursework PDF's framing of the
   deliverable as a "small transformer-based **language model**". Three
   public classes:
@@ -213,8 +283,8 @@ Phase 6B (Novelty N5 multi-task infrastructure, already wired), Phase 7
   - `MTLMLossComponents` dataclass for per-component logging in the
     training loop (total / cat / pay / num / n_masked).
 
-- **`src/train_mtlm.py`** *(new, ~440 LOC)* — Phase 6A pretraining loop.
-  Mirrors `src/train.py`'s infrastructure (same cosine-warmup LR
+- **`src/training/train_mtlm.py`** *(new, ~440 LOC)* — Phase 6A pretraining loop.
+  Mirrors `src/training/train.py`'s infrastructure (same cosine-warmup LR
   schedule, same `EarlyStopping`, same checkpoint layout) so the two
   entry points share their correctness-critical paths. CLI exposes
   every Plan §8.5 hyperparameter: `--mask-prob`, `--min-mask`,
@@ -228,23 +298,23 @@ Phase 6B (Novelty N5 multi-task infrastructure, already wired), Phase 7
     model with MTLM head).
   - **`encoder_pretrained.pt`** — the encoder + embedding state dict
     only, sized ~130 KB, consumed directly by
-    `python src/train.py --pretrained-encoder PATH` for the Plan
+    `python -m src.training.train --pretrained-encoder PATH` for the Plan
     §8.5.5 two-stage fine-tune.
   - Early-stopped on held-out reconstruction loss (no supervised label
     leakage).
 
-- **`src/model.py` — `TabularTransformer.load_pretrained_encoder`
+- **`src/models/model.py` — `TabularTransformer.load_pretrained_encoder`
   generalised**: now accepts **either** a full checkpoint bundle
   (`<path>.pt` + `<path>.pt.weights` sidecar — the
   `utils.save_checkpoint` layout, safely loaded under `weights_only=True`)
   **or** a raw `torch.save`-style state-dict file — the latter is what
-  `src/train_mtlm.py` emits. Detection is by sidecar presence; failure
+  `src/training/train_mtlm.py` emits. Detection is by sidecar presence; failure
   modes (missing file, non-dict payload, shape mismatch) raise with
   actionable messages. Preserves the SECURITY_AUDIT C-1 weights-only
   default. Return payload now includes `missing_keys` / `unexpected_keys`
   for downstream sanity checks.
 
-- **`src/model.py` — `TabularTransformer.predict_logits(loader, device=None,
+- **`src/models/model.py` — `TabularTransformer.predict_logits(loader, device=None,
   return_attn=False)`** *(new inference helper, ~60 LOC)* — `@torch.no_grad()`
   scoring loop that flips the model to `eval()` mode, moves each batch
   (nested dicts + tensors) to the target device, concatenates per-batch
@@ -253,11 +323,11 @@ Phase 6B (Novelty N5 multi-task infrastructure, already wired), Phase 7
   in notebooks and post-training scripts; consumed by `predict_proba` and
   by `notebooks/04_train_transformer.ipynb`. _(Tamer Atesyakar)_
 
-- **`src/model.py` — `TabularTransformer.predict_proba(loader, device=None)`**
+- **`src/models/model.py` — `TabularTransformer.predict_proba(loader, device=None)`**
   *(new)* — thin convenience wrapper returning `σ(predict_logits().logit)`
   as a `(N,)` CPU tensor. _(Tamer Atesyakar)_
 
-- **`src/model.py` — `TabularTransformer.ensemble_probabilities(probabilities,
+- **`src/models/model.py` — `TabularTransformer.ensemble_probabilities(probabilities,
   mode)`** *(new `@staticmethod`)* — minimum-viable ensembler that combines
   per-seed probability vectors via `mode ∈ {"arithmetic", "geometric"}`.
   `"arithmetic"` = simple mean; `"geometric"` = `σ(mean(logit))` via
@@ -278,7 +348,7 @@ Phase 6B (Novelty N5 multi-task infrastructure, already wired), Phase 7
 
 ### Changed — Phase 7: widened Random Forest hyperparameter grid
 
-- **`src/random_forest.py`** — hyperparameter grid upgraded from the
+- **`src/baselines/random_forest.py`** — hyperparameter grid upgraded from the
   earlier proof-of-concept (60 iter × 6 parameters) to the full Plan
   §9.3 spec: **200 iter × 7 parameters** (`n_estimators ∈ [100, 200,
   300, 500, 1000]`, `max_depth ∈ [5, 10, 15, 20, 30, None]`,
@@ -288,9 +358,9 @@ Phase 6B (Novelty N5 multi-task infrastructure, already wired), Phase 7
   "entropy"]`). Default `n_iter` bumped 60 → 200 to match the plan's
   full 1,000-fit budget.
 
-### Added — `src/train.py` final-evaluation artefacts on all three splits
+### Added — `src/training/train.py` final-evaluation artefacts on all three splits
 
-- **`src/train.py` writes `{train,val,test}_metrics.json` + `{train,val,test}_predictions.npz`**
+- **`src/training/train.py` writes `{train,val,test}_metrics.json` + `{train,val,test}_predictions.npz`**
   at the end of each run, *after* the best-val-AUC-ROC checkpoint is
   restored. Previously only `test_*` artefacts were persisted, which made
   train/val parity checks impossible without re-running inference. An
@@ -317,23 +387,23 @@ Phase 6B (Novelty N5 multi-task infrastructure, already wired), Phase 7
 These were produced by loading each run's `best.pt.weights` sidecar
 (SECURITY_AUDIT C-1 weights-only) and running `evaluate_on_loader` on
 the three preprocessed splits — no re-training was performed. Going
-forward, `src/train.py` writes these files natively on every run (see
+forward, `src/training/train.py` writes these files natively on every run (see
 above). _(Tamer Atesyakar)_
 
 ### Added — RF diagnostic figures (200-iter tuning run)
 
 The five Plan §9 publication-quality figures for the widened RF
-benchmark now live under `figures/` (all at 300 DPI):
+benchmark now live under `figures/baseline/` (all at 300 DPI):
 
-- `figures/rf_confusion_matrix.png` — baseline vs tuned RF confusion
+- `figures/baseline/rf_confusion_matrix.png` — baseline vs tuned RF confusion
   matrix side-by-side at τ=0.5
-- `figures/rf_feature_importance.png` — Gini + permutation importance
+- `figures/baseline/rf_feature_importance.png` — Gini + permutation importance
   bar charts for the top 22 engineered + raw features
-- `figures/rf_roc_pr_curves.png` — ROC and PR curves for baseline and
+- `figures/baseline/rf_roc_pr_curves.png` — ROC and PR curves for baseline and
   tuned RF, with AUC / AP annotations
-- `figures/rf_threshold_analysis.png` — precision / recall / F1 vs
+- `figures/baseline/rf_threshold_analysis.png` — precision / recall / F1 vs
   threshold sweep for tuned RF (caps F1 around τ≈0.548)
-- `figures/rf_tuning_analysis.png` — `RandomizedSearchCV` hyperparameter
+- `figures/baseline/rf_tuning_analysis.png` — `RandomizedSearchCV` hyperparameter
   importance + validation-score distribution over the 200 iterations
 
 ### Changed — `.gitignore` additions for heavy, regeneratable artefacts
@@ -346,8 +416,8 @@ benchmark now live under `figures/` (all at 300 DPI):
   `test_predictions.npz`, `best.pt.meta.json`) **stay** in git so that
   the head-to-head numbers and the ensemble script can be audited
   without re-running. Gitignore block gains a multi-line comment
-  documenting the reproduction command (`poetry run python src/train.py
-  …` / `src/train_mtlm.py …`) and the rationale.
+  documenting the reproduction command (`poetry run python -m src.training.train
+  …` / `src.training.train_mtlm …`) and the rationale.
 
 ### Changed — `src/__init__.py` package overview
 
@@ -359,7 +429,7 @@ benchmark now live under `figures/` (all at 300 DPI):
 ### Training results on this branch (final numbers)
 
 Artefacts under `results/`:
-- `results/rf_*.{csv,json}` — RF benchmark at 200-iter tuning
+- `results/baseline/rf_*.{csv,json}` — RF benchmark at 200-iter tuning
 - `results/transformer/seed_42/` — supervised-from-scratch (plan-default
   config, N2+N3 on, focal γ=2)
 - `results/transformer/seed_1/` — replicate seed 1 for ensembling
@@ -383,7 +453,7 @@ Phase 8 modules; sklearn + scipy used inline).
 ### Pushed-to-max numbers on the held-out test set (4,500 rows, 22.1% positives)
 
 Every artefact is reproducible from the repo's state at this commit via the
-`poetry run python src/train_mtlm.py …` + `src/train.py …` CLI runs checked
+`poetry run python -m src.training.train_mtlm …` + `src.training.train …` CLI runs checked
 into `results/*/config.json`. Ensembles are computed over the four per-seed
 `test_predictions.npz` files using `model.TabularTransformer.ensemble_probabilities`
 (arithmetic mean) or the equivalent log-odds geometric mean.
@@ -409,7 +479,7 @@ ensemble_arith_4model             0.50   0.7819  0.5656  0.5282  0.4567  0.6261 
 ensemble_geom_4model              0.50   0.7818  0.5655  0.5282  0.4567  0.6261  0.2586  0.2080
   + F1-optimal tau                0.54   0.7818  0.5655  0.5491  0.5505  0.5477  0.2586  0.2080
 -----------------------------------------------------------------------------------------------
-RF reference (from results/rf_metrics.csv):
+RF reference (from results/baseline/rf_metrics.csv):
   Baseline RF      : AUC-ROC 0.7654  AUC-PR 0.5389  F1 0.4647  (τ=0.5)
   Tuned RF (200 it): AUC-ROC 0.7845  AUC-PR 0.5673  F1 0.4642  (τ=0.5)
 ===============================================================================================
@@ -477,7 +547,7 @@ RF tuned (200-iter)          0.8189²   0.7863²    —        —         0.822
   pre-conditioned on the full 21 K train rows in an unsupervised objective
   before supervised gradient touches them).
 
-**Key observations** (also saved as `results/head_to_head_summary.txt` —
+**Key observations** (also saved as `results/evaluation/comparison/head_to_head_summary.txt` —
 the committed text file that mirrors the table above):
 
 * **Transformer ensemble vs RF tuned on AUC-ROC**: `0.7819 (4-model ensemble) vs 0.7845 (RF tuned)`
@@ -502,13 +572,13 @@ the committed text file that mirrors the table above):
   you can plausibly point at on a credit dataset.
 
 These numbers are the ones the final report should cite; when Phase 8
-(`src/evaluate.py`) and Phase 12 (`src/stat_tests.py`) land, they will
+(`src/evaluation/evaluate.py`) and Phase 12 (`src/evaluation/significance.py`) land, they will
 add paired-bootstrap 95% CIs and a DeLong/McNemar significance layer on
 top of this table.
 
 ### Added — Phase 4 completion + Phase 6 supervised training stack
 
-- **`src/model.py` (new, ~500 LOC)** — `TabularTransformer`: end-to-end
+- **`src/models/model.py` (new, ~500 LOC)** — `TabularTransformer`: end-to-end
   wiring of tokenizer → embedding → encoder → pool → 2-layer MLP head →
   logit (Plan §6.7 / §6.10 / §6.11). Exposes every architectural switch:
   `d_model` / `n_heads` / `n_layers` / `d_ff` / per-channel
@@ -523,7 +593,7 @@ top of this table.
   breakdown + every active switch), `__repr__` one-liner. Parameter count
   at Plan §6.11 defaults: **28,417** — spot on the Plan §6.9 ~28K budget.
   _(Tamer Atesyakar)_
-- **`src/train.py` (new, ~550 LOC)** — Plan §8 supervised training loop:
+- **`src/training/train.py` (new, ~550 LOC)** — Plan §8 supervised training loop:
   AdamW (§8.1), linear-warmup + cosine decay LR schedule (§8.2), gradient
   clipping (§8.3), independently-ablatable dropout channels, optional
   stratified batching (§8.8), `EarlyStopping` on validation AUC-ROC
@@ -537,7 +607,7 @@ top of this table.
   Phase 10), hardened `best.pt` + sidecars. `--smoke-test` mode for CI
   (2 epochs on ~500 rows). `main(argv=None)` is importable so Colab /
   notebooks can invoke the pipeline programmatically. _(Tamer Atesyakar)_
-- **`src/transformer.py`: `FeatureGroupBias` (Novelty N2 / Plan §6.12.1
+- **`src/models/transformer.py`: `FeatureGroupBias` (Novelty N2 / Plan §6.12.1
   / Ablation A21)** — a learnable 5×5 bias matrix indexed by the
   semantic group of (query, key) tokens. Groups: `{CLS, demographic,
   PAY, BILL_AMT, PAY_AMT}`. Zero-initialised — the model activates the
@@ -547,7 +617,7 @@ top of this table.
   dispatch path at exactly one `attn_bias` tensor regardless of how many
   novelty modules are active. Completes **Phase 4** of the plan.
   _(Tamer Atesyakar)_
-- **`src/embedding.py`: `build_group_assignment(cls_offset=1)`** —
+- **`src/tokenization/embedding.py`: `build_group_assignment(cls_offset=1)`** —
   drift-safe canonical group-index list derived from `TOKEN_ORDER`,
   consumed by `FeatureGroupBias`. Group constants
   `FEATURE_GROUP_CLS / _DEMOGRAPHIC / _PAY / _BILL / _PAY_AMT` +
@@ -555,30 +625,30 @@ top of this table.
   display / logging. `describe_token_layout(cls_offset=1)` helper that
   renders the 24-slot table (position / group / feature / month) for
   notebook inclusion and report appendices. _(Tamer Atesyakar)_
-- **`src/tokenizer.py`: `pay_raw` in batch + `PAY_RAW_NUM_CLASSES = 11`** —
+- **`src/tokenization/tokenizer.py`: `pay_raw` in batch + `PAY_RAW_NUM_CLASSES = 11`** —
   every dataset item now carries the raw PAY values shifted into
   `[0, 10]`, directly usable as an 11-class `nn.CrossEntropyLoss` target
   for MTLM prediction heads (Novelty N4 prep) and for the N5 multi-task
   PAY_0 auxiliary forecast head. Populated by both
   `tokenize_dataframe` and both collators (`dataset.default_collate`,
   `tokenizer.MTLMCollator._default_collate`). _(Tamer Atesyakar)_
-- **`src/tokenizer.py`: `validate_dataframe_schema(df, strict=True)`** —
+- **`src/tokenization/tokenizer.py`: `validate_dataframe_schema(df, strict=True)`** —
   single-pass schema / PAY-range / NaN check for a post-rename raw
   DataFrame. With `strict=True` raises on any issue; with
   `strict=False` returns a structured report for a preprocessing
   pipeline to act on. Plan §3. _(Tamer Atesyakar — via parallel agent)_
-- **`src/tokenizer.py`: `tokenization_summary(tensors_dict)`** —
+- **`src/tokenization/tokenizer.py`: `tokenization_summary(tensors_dict)`** —
   diagnostic summary (per-categorical value counts, PAY state
   distribution, severity stats, numerical-feature min/max) of a
   `tokenize_dataframe` output. Handy in notebooks and MTLM debug.
   _(Tamer Atesyakar — via parallel agent)_
-- **`src/tokenizer.py`: `PAY_STATE_NAMES` dict** (`{0: "no_bill",
+- **`src/tokenization/tokenizer.py`: `PAY_STATE_NAMES` dict** (`{0: "no_bill",
   1: "paid_full", 2: "minimum", 3: "delinquent"}`) + `DEMOGRAPHIC_FEATURES`
   local copy. _(Tamer Atesyakar — via parallel agent)_
-- **`src/embedding.py`: `FeatureEmbedding.freeze_encoder(freeze=True)`** —
+- **`src/tokenization/embedding.py`: `FeatureEmbedding.freeze_encoder(freeze=True)`** —
   toggle `requires_grad` on every embedding parameter for the §8.5.5
   two-stage fine-tune workflow. _(Tamer Atesyakar — via parallel agent)_
-- **`src/embedding.py`: `FeatureEmbedding.init_from_pretrained_statedict`** —
+- **`src/tokenization/embedding.py`: `FeatureEmbedding.init_from_pretrained_statedict`** —
   load only embedding-relevant keys from a larger (e.g. TabularTransformer
   or MTLM) state dict, with auto-prefix stripping and a `{loaded,
   missing, unexpected}` report. _(Tamer Atesyakar — via parallel agent)_
@@ -638,7 +708,7 @@ top of this table.
 
 ### Added
 - **`tests/test_transformer.py` (new, ≈370 LOC, 26 cases)** — closes the
-  pytest-coverage gap for the entire `src/transformer.py` module that landed
+  pytest-coverage gap for the entire `src/models/transformer.py` module that landed
   in PR #8. Covers `FeedForward` shape + init variance (Kaiming vs Xavier
   per-layer), `TransformerBlock` PreNorm residual identity contract under
   zeroed weights, `TransformerBlock` attn_bias threading, independently
@@ -672,24 +742,24 @@ top of this table.
   23-sequence positions without `[CLS]`, and `TOKEN_ORDER` is well-formed
   (length 23, block-aligned to categorical/PAY/numerical). _(Tamer
   Atesyakar)_
-- **`src/embedding.py`: `build_temporal_layout(cls_offset=1)` helper** — the
+- **`src/tokenization/embedding.py`: `build_temporal_layout(cls_offset=1)` helper** — the
   canonical, drift-safe source of truth for `TemporalDecayBias` /
   `FeatureGroupBias` / any consumer needing positions of the three temporal
   groups (PAY / BILL_AMT / PAY_AMT) in the 24-token (or 23-token) sequence.
   Derived from `TOKEN_ORDER` so any future reordering is caught by the
-  drift-detection assertion in `src/transformer.py`'s smoke test and by
+  drift-detection assertion in `src/models/transformer.py`'s smoke test and by
   `tests/test_embedding.py::test_build_temporal_layout_matches_canonical_token_order`.
   _(Tamer Atesyakar)_
-- **`src/embedding.py`: `load_cat_vocab_sizes(metadata_path=None)` helper** —
+- **`src/tokenization/embedding.py`: `load_cat_vocab_sizes(metadata_path=None)` helper** —
   lazy replacement for the old module-import-time JSON load. The legacy
   `CAT_VOCAB_SIZES` attribute is preserved via PEP 562 module `__getattr__`
   so existing callers and tests continue to work; new code should prefer
   `FeatureEmbedding(cat_vocab_sizes=...)` for hermetic test construction.
   _(Tamer Atesyakar)_
-- **`src/embedding.py`: `FeatureEmbedding(cat_vocab_sizes=...)` kwarg** —
+- **`src/tokenization/embedding.py`: `FeatureEmbedding(cat_vocab_sizes=...)` kwarg** —
   explicit vocabulary override so `FeatureEmbedding` can be constructed
   without disk I/O. _(Tamer Atesyakar)_
-- **`src/transformer.py`: `TransformerBlock` + `TransformerEncoder` accept
+- **`src/models/transformer.py`: `TransformerBlock` + `TransformerEncoder` accept
   independent `attn_dropout` / `ffn_dropout` / `residual_dropout` kwargs** —
   with the shared `dropout` kwarg preserved as the default for each.
   Enables Plan §6.3 and Ablation A12 (attention-weight vs FFN vs residual
@@ -712,29 +782,29 @@ top of this table.
   Atesyakar)_
 
 ### Changed
-- **`src/attention.py`: `MultiHeadAttention` default `d_model` 64 → 32** —
+- **`src/models/attention.py`: `MultiHeadAttention` default `d_model` 64 → 32** —
   matches Plan §6.11 (~28K-parameter encoder target). No caller relies on
   the default — every existing test and smoke test passes `d_model`
   explicitly. _(Tamer Atesyakar)_
-- **`src/transformer.py`: `FeedForward` / `TransformerBlock` /
+- **`src/models/transformer.py`: `FeedForward` / `TransformerBlock` /
   `TransformerEncoder` default `d_model` 64 → 32** — same rationale as
   attention. Existing smoke test and all 26 new tests pass `d_model`
   explicitly. _(Tamer Atesyakar)_
-- **`src/transformer.py`: `TransformerEncoder` docstring expanded** with
+- **`src/models/transformer.py`: `TransformerEncoder` docstring expanded** with
   (a) the rationale for the shared-across-layers temporal-decay bias
   (ALiBi convention, one-scalar novelty parameter count, clean A22
   on/off axis), and (b) the `register_buffer(persistent=False)` caveat
   advising callers to construct encoders with identical `temporal_layout`
   at checkpoint-load time. _(Tamer Atesyakar)_
-- **`src/transformer.py`: smoke test now derives layout via
+- **`src/models/transformer.py`: smoke test now derives layout via
   `embedding.build_temporal_layout()` + drift-detection assertion against
   the canonical expected layout** — previously hard-coded. Closes reviewer's
   PR #8 checklist item #5. _(Tamer Atesyakar)_
-- **`src/tokenizer.py`, `src/dataset.py`: `__main__` smoke tests now
+- **`src/tokenization/tokenizer.py`, `src/training/dataset.py`: `__main__` smoke tests now
   gracefully skip** with an actionable message when
   `data/processed/*.csv` is absent, rather than crashing with
   `FileNotFoundError`. _(Tamer Atesyakar)_
-- **`src/tokenizer.py`: `build_numerical_vocab()` docstring** — clarifies
+- **`src/tokenization/tokenizer.py`: `build_numerical_vocab()` docstring** — clarifies
   that this helper is primarily a documentation / sanity artefact; the
   production path uses `NUMERICAL_FEATURES` directly. _(Tamer Atesyakar)_
 - **`PROJECT_PLAN.md`: status markers updated** for Phases 3, 4, 5, 6, 6A,
@@ -749,11 +819,11 @@ top of this table.
   constraint set in PR #6/commit 6a7e3d3. _(Tamer Atesyakar)_
 
 ### Fixed
-- **`src/train.py`: argparse `%` format-string escape (`de6e547`)** —
+- **`src/training/train.py`: argparse `%` format-string escape (`de6e547`)** —
   two `--help` strings contained literal `%` characters
   (`"fraction of warmup steps (e.g. 10%)"` and `"dropout applied at 5%"`)
   which Python's argparse interpolates as printf-style format specifiers.
-  Result: `python src/train.py --help` crashed with
+  Result: `python -m src.training.train --help` crashed with
   `ValueError: unsupported format character 'w'`. Doubled `%` → `%%`
   on the two affected lines (203, 215). Reviewer-flagged on PR #10
   by _FardeenIdrus_. _(Tamer Atesyakar)_
@@ -768,7 +838,7 @@ top of this table.
   "confidently correct peaky model" (`logits = (y*2-1) * 4.0`), which is
   the regime where smoothing _is_ expected to raise the loss. Explanatory
   docstring added. _(Tamer Atesyakar)_
-- **`src/train_mtlm.py` val loader `drop_last=False`** — MTLM validation
+- **`src/training/train_mtlm.py` val loader `drop_last=False`** — MTLM validation
   loop was yielding zero batches (and thus `NaN` held-out loss) on small
   val splits because `make_loader(mode="mtlm")` defaulted to
   `drop_last=True`. Val loader now explicitly requests `drop_last=False`
@@ -781,7 +851,7 @@ top of this table.
   receive gradient in a single forward/backward. Relaxed the assertion
   to the set of parameters actually addressed by the batch's mask.
   _(Tamer Atesyakar)_
-- **`src/embedding.py`: MTLM mask replacement now preserves the temporal
+- **`src/tokenization/embedding.py`: MTLM mask replacement now preserves the temporal
   positional embedding on masked temporal tokens.** Previously only the
   feature positional embedding was subtracted and re-added, so a masked
   PAY_0 silently lost its month-0 signal while an unmasked PAY_0 kept it.
@@ -792,19 +862,19 @@ top of this table.
   temporal_pos_at_masked_temporal_tokens` and
   `test_mtlm_mask_preserves_temporal_pos_differs_across_months`. _(Tamer
   Atesyakar)_
-- **`run_pipeline.py`: UTF-8 stdout/stderr reconfiguration** — prevents the
+- **`scripts/run_pipeline.py`: UTF-8 stdout/stderr reconfiguration** — prevents the
   Windows default codec (cp1251 / cp1252) from raising `UnicodeEncodeError`
   on the provenance logger's `×` and `→` characters. Cross-platform (no-op
-  on Unix/macOS). Unblocked `poetry run python run_pipeline.py
+  on Unix/macOS). Unblocked `poetry run python scripts/run_pipeline.py
   --preprocess-only` on Windows. _(Tamer Atesyakar)_
-- **`src/embedding.py`: module import is now side-effect-free** — the
+- **`src/tokenization/embedding.py`: module import is now side-effect-free** — the
   feature_metadata.json load moved from module scope into
   `load_cat_vocab_sizes()` and is triggered lazily on first need. Fresh
   clones no longer fail `pytest` collection when preprocessing hasn't been
   run. _(Tamer Atesyakar)_
 
 ### Security
-- **`src/data_sources.py`: UCIRepoSource now applies a socket-level
+- **`src/data/sources.py`: UCIRepoSource now applies a socket-level
   `socket.setdefaulttimeout()` under the fetch** in addition to the existing
   `ThreadPoolExecutor` wall-clock deadline, closing SECURITY_AUDIT H-2
   (slow-loris / dangling-socket risk via `ucimlrepo`'s unwrapped
@@ -822,7 +892,7 @@ top of this table.
 ## [0.8.0] — 2026-04-17 — Transformer encoder (PR #8)
 
 ### Added
-- **`src/transformer.py` (new, 412 LOC)** — PR #8 by _FardeenIdrus_:
+- **`src/models/transformer.py` (new, 412 LOC)** — PR #8 by _FardeenIdrus_:
   - **`FeedForward`** — two-layer MLP with Kaiming-normal init on the
     GELU-feeding linear and Xavier-normal init on the residual-feeding
     linear (per Plan §6.8). Default `d_ff = 4 * d_model`.
@@ -849,7 +919,7 @@ top of this table.
   suppression vs PAY_0→PAY_2, and the three ablation modes.
 
 ### Changed
-- **`src/attention.py` (+36/-5)** — `ScaledDotProductAttention.forward` and
+- **`src/models/attention.py` (+36/-5)** — `ScaledDotProductAttention.forward` and
   `MultiHeadAttention.forward` now accept an optional `attn_bias` kwarg.
   Default `None` preserves bit-identical pre-PR-#8 behaviour under the same
   seed. Smoke test extended with regression (zero-bias ≡ no-bias) and
@@ -895,37 +965,37 @@ _(Commit `ab2595c`, author `abailey81`.)_
 _(Commit `4b2d105`, author `abailey81`.)_
 
 ### Added
-- **`src/tokenizer.py`: `MTLMCollator`** — BERT-style masking collator for
+- **`src/tokenization/tokenizer.py`: `MTLMCollator`** — BERT-style masking collator for
   Phase 6A self-supervised pretraining (Plan §5.4B, Novelty N4
   prerequisite). Supports 15% mask rate with 80/10/10 `[MASK]` /
   random-replace / keep-unchanged split, per-row min/max mask bounds (so
   every row contributes a loss term and difficulty is capped),
   seedable `torch.Generator` for reproducibility.
-- **`src/tokenizer.py`: vectorised path** — whole-DataFrame tokenisation
+- **`src/tokenization/tokenizer.py`: vectorised path** — whole-DataFrame tokenisation
   in one pass via NumPy ops, replacing per-row `df.iloc[i]` loops. O(1)
   `__getitem__` on the resulting Dataset.
-- **`src/embedding.py`: optional temporal positional encoding** —
+- **`src/tokenization/embedding.py`: optional temporal positional encoding** —
   learnable `nn.Embedding(6, d_model)` added to every PAY / BILL_AMT /
   PAY_AMT token (non-temporal tokens unaffected). Controls Ablation A7
   (Plan §5.4).
-- **`src/embedding.py`: optional `[MASK]` token** — learnable
+- **`src/tokenization/embedding.py`: optional `[MASK]` token** — learnable
   `nn.Parameter(torch.randn(d_model) * 0.02)` that replaces content at
   MTLM-masked positions while preserving the feature positional embedding.
   Enables Novelty N4.
-- **`src/tokenizer.py`: `PAYValueError`** — descriptive bounds-check
+- **`src/tokenization/tokenizer.py`: `PAYValueError`** — descriptive bounds-check
   exception with coordinate reporting when PAY values fall outside
   `[-2, 8]`.
-- **`src/tokenizer.py`: `encode_pay_value` hybrid state + severity
+- **`src/tokenization/tokenizer.py`: `encode_pay_value` hybrid state + severity
   encoding (Novelty N1)** — `{-2 → no_bill, -1 → paid, 0 → revolving,
   1..8 → delinquent}` with normalised severity `value / 8` for
   delinquency. Respects both the categorical structure of `{-2, -1, 0}`
   and the ordinal structure of `{1..8}`.
 
 ### Changed
-- **`src/embedding.py`: stronger weight initialisation** — categorical
+- **`src/tokenization/embedding.py`: stronger weight initialisation** — categorical
   embeddings and positional tables use `𝒩(0, 0.02)` per BERT convention
   (Devlin et al., 2019); PAY severity projection uses Xavier.
-- **`src/embedding.py`: `ModuleDict` for per-feature embeddings** so
+- **`src/tokenization/embedding.py`: `ModuleDict` for per-feature embeddings** so
   `nn.Module.to()` / `.cuda()` / `.state_dict()` move them cleanly.
 
 ---
@@ -935,7 +1005,7 @@ _(Commit `4b2d105`, author `abailey81`.)_
 _(Commit `c491d1d`, author `abailey81`; 11 files / 2,510 LOC.)_
 
 ### Added
-- **`src/utils.py` (612 LOC)** — determinism protocol (`set_deterministic`
+- **`src/training/utils.py` (612 LOC)** — determinism protocol (`set_deterministic`
   seeds Python / NumPy / torch CPU & CUDA, disables cuDNN autotuner,
   enables deterministic algorithms with optional `warn_only`), derived
   sub-seeds (`derive_seed`), device selection (CPU / CUDA / Apple MPS),
@@ -946,12 +1016,12 @@ _(Commit `c491d1d`, author `abailey81`; 11 files / 2,510 LOC.)_
   `EarlyStopping` (min/max mode, min_delta, best-state stash), parameter
   accounting (`count_parameters`, `format_parameter_count`), `Timer`
   context manager, idempotent logging configuration.
-- **`src/losses.py` (379 LOC)** — `WeightedBCELoss` (inverse-frequency
+- **`src/training/losses.py` (379 LOC)** — `WeightedBCELoss` (inverse-frequency
   class weighting), `FocalLoss` (Lin et al., 2017; γ-configurable,
   α-configurable with scalar / tuple / `"balanced"` / `None` modes;
   γ=0 reduces to plain BCE to float32 precision), `LabelSmoothingBCELoss`
   (Müller et al., 2019; ε-configurable, defaults to 0.05 per §7.3).
-- **`src/dataset.py` (405 LOC)** — `StratifiedBatchSampler` (every batch
+- **`src/training/dataset.py` (405 LOC)** — `StratifiedBatchSampler` (every batch
   contains exactly `round(batch_size * positive_rate)` positives — caps
   gradient-variance from class imbalance), `make_loader` factory with
   `train` / `val` / `test` / `mtlm` modes, seedable generator for
@@ -991,7 +1061,7 @@ _(PR #7 merged as commit `012b58e`; feature commit `8ec2ac4` author
 _Fardeen Idrus_.)_
 
 ### Added
-- **`src/attention.py` (186 LOC)** — from-scratch
+- **`src/models/attention.py` (186 LOC)** — from-scratch
   `ScaledDotProductAttention` and `MultiHeadAttention`. Implements
   `Attention(Q, K, V) = softmax(QK^T / √d_k) V` with optional attention-
   weight dropout (post-softmax), Xavier-normal initialisation on the
@@ -1020,7 +1090,7 @@ _(PR #6 by _Idaliia19_, commit `a031c71`.)_
 _(PR #5 by _LexieLee1020_, commits `ec60851` + fix `a936c8b`.)_
 
 ### Added
-- **`src/embedding.py` — initial `FeatureEmbedding` class (201 LOC)** —
+- **`src/tokenization/embedding.py` — initial `FeatureEmbedding` class (201 LOC)** —
   converts the tokenizer output (cat_indices, pay_state_ids,
   pay_severities, num_values) into a `(B, 24, d_model)` token sequence:
   one [CLS] token + 23 feature tokens. Per-feature projection heads
@@ -1028,7 +1098,7 @@ _(PR #5 by _LexieLee1020_, commits `ec60851` + fix `a936c8b`.)_
   hybrid state + severity for PAY.
 
 ### Fixed
-- **`src/embedding.py`** (commit `a936c8b`) — miscellaneous corrections
+- **`src/tokenization/embedding.py`** (commit `a936c8b`) — miscellaneous corrections
   to the initial embedding: 66 insertions / 66 deletions across bias
   initialisation, positional-embedding ordering, and per-feature projection
   wiring.
@@ -1040,16 +1110,16 @@ _(PR #5 by _LexieLee1020_, commits `ec60851` + fix `a936c8b`.)_
 _(PR #4 by _Idaliia19_; commits `0ef43b3` + fixes `311b81c`, `527db26`.)_
 
 ### Added
-- **`src/tokenizer.py` — initial `CreditDefaultDataset` + vocab builders
+- **`src/tokenization/tokenizer.py` — initial `CreditDefaultDataset` + vocab builders
   (262 LOC)** — hybrid PAY state + severity tokenisation, vectorised
   `tokenize_dataframe`, PyTorch `Dataset` wrapper.
 
 ### Changed
-- **`src/tokenizer.py`** (commit `527db26`) — adopts `nn.ModuleDict` for
+- **`src/tokenization/tokenizer.py`** (commit `527db26`) — adopts `nn.ModuleDict` for
   per-feature embeddings in the partner embedding module, removes the
   redundant `num_feature_ids` indexing (Issue 3), tightens the hybrid PAY
   encoding.
-- **`src/tokenizer.py`** (commit `311b81c`) — removes `num_feature_ids`
+- **`src/tokenization/tokenizer.py`** (commit `311b81c`) — removes `num_feature_ids`
   (Issue 3); 24 insertions / 33 deletions of dead numerical-index
   bookkeeping.
 
@@ -1060,7 +1130,7 @@ _(PR #4 by _Idaliia19_; commits `0ef43b3` + fixes `311b81c`, `527db26`.)_
 _(Commits `199d33b` + `3afbc0e` + `2dcfbff`, author `abailey81`.)_
 
 ### Added
-- **`src/data_sources.py` (519 LOC)** — layered, provenance-aware data
+- **`src/data/sources.py` (519 LOC)** — layered, provenance-aware data
   loader:
   - `DataSource` (abstract base)
   - `UCIRepoSource` — fetches via `ucimlrepo` with bounded retries +
@@ -1073,7 +1143,7 @@ _(Commits `199d33b` + `3afbc0e` + `2dcfbff`, author `abailey81`.)_
   - `DataSourceResult` frozen dataclass (dataframe + source name + source
     type + origin URI + elapsed time + failed-attempts list)
   - `build_default_data_source(...)` factory
-- **`run_pipeline.py` CLI** — `--source {auto,api,local}`, `--no-fallback`,
+- **`scripts/run_pipeline.py` CLI** — `--source {auto,api,local}`, `--no-fallback`,
   `--data-path FILE` honouring pinned paths as a hard pin (never silently
   hits the network).
 - **Data loader documentation across README + module docstrings** (commit
@@ -1089,7 +1159,7 @@ _(Commits `199d33b` + `3afbc0e` + `2dcfbff`, author `abailey81`.)_
 _(PR #3 by _Shakhzod555_, commits `e0961cc` + `1fd79f5`.)_
 
 ### Added
-- **`src/random_forest.py` (870 LOC)** — end-to-end RF benchmark:
+- **`src/baselines/random_forest.py` (870 LOC)** — end-to-end RF benchmark:
   reuses the shared preprocessing pipeline (normalise → clean → engineer
   → split); baseline RF (100 trees); `RandomizedSearchCV` (60 iter × 5-
   fold CV over a 7-dimension hyperparameter grid); evaluate
@@ -1118,11 +1188,11 @@ _(Commit `0b49bd9`, author `abailey81`; 29 files / 12,499 LOC.)_
 
 ### Added
 - **Project scaffold**: `pyproject.toml`, `poetry.lock`, `LICENSE` (MIT),
-  `README.md` (387 lines), `.gitignore`, `run_pipeline.py` CLI entry
+  `README.md` (387 lines), `.gitignore`, `scripts/run_pipeline.py` CLI entry
   point.
 - **`docs/coursework_spec.md` (105 lines)** — markdown transcription of
   the coursework PDF for in-repo reference.
-- **`src/data_preprocessing.py` (567 LOC)** — schema normalisation
+- **`src/data/preprocessing.py` (567 LOC)** — schema normalisation
   (`PAY_1 → PAY_0`, drop `ID`), categorical cleaning (merge
   `EDUCATION {0,5,6} → 4`, `MARRIAGE 0 → 3`), validation report
   (missing-value count, duplicate detection, range checks), 22-feature
@@ -1131,7 +1201,7 @@ _(Commit `0b49bd9`, author `abailey81`; 29 files / 12,499 LOC.)_
   70/15/15 split preserving 22.1% default rate, leak-free
   `StandardScaler` fit on train only, feature-metadata export (category
   mappings, scaler stats, feature ordering) for the tokeniser.
-- **`src/eda.py` (847 LOC)** — 12 publication-quality figures with
+- **`src/analysis/eda.py` (847 LOC)** — 12 publication-quality figures with
   statistical tests:
   - Fig 01 class distribution (Wilson CI)
   - Fig 02 categorical features by target (χ²)
@@ -1160,9 +1230,9 @@ _(Commit `0b49bd9`, author `abailey81`; 29 files / 12,499 LOC.)_
   vocab sizes, canonical `feature_order`.
 - **`data/processed/validation_report.json`** — initial data-quality
   audit (30,000 rows, 0 missing, 35 duplicates, target 77.9/22.1 split).
-- **`results/summary_statistics.{csv,tex}`** — mean/std/median/skewness/
+- **`results/analysis/summary_statistics.{csv,tex}`** — mean/std/median/skewness/
   kurtosis for all 23 features split by default status.
-- **`figures/fig01..11,13.png`** — 12 EDA figures at 300 DPI.
+- **`figures/eda/fig01..11,13.png`** — 12 EDA figures at 300 DPI.
 
 ---
 

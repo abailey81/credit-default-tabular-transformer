@@ -18,11 +18,11 @@ def dummy_batch():
     B = 4
     return {
         "cat_indices": {
-            "SEX":       torch.tensor([0, 1, 0, 1]),
+            "SEX": torch.tensor([0, 1, 0, 1]),
             "EDUCATION": torch.tensor([0, 1, 2, 3]),
-            "MARRIAGE":  torch.tensor([0, 1, 2, 0]),
+            "MARRIAGE": torch.tensor([0, 1, 2, 0]),
         },
-        "pay_state_ids":  torch.tensor(
+        "pay_state_ids": torch.tensor(
             [[0, 1, 2, 3, 3, 3], [3, 3, 2, 1, 0, 0], [2, 2, 2, 2, 2, 2], [0, 0, 0, 3, 3, 3]],
             dtype=torch.long,
         ),
@@ -35,8 +35,8 @@ def dummy_batch():
             ],
             dtype=torch.float,
         ),
-        "num_values":     torch.randn(B, 14),
-        "label":          torch.tensor([0.0, 1.0, 0.0, 1.0]),
+        "num_values": torch.randn(B, 14),
+        "label": torch.tensor([0.0, 1.0, 0.0, 1.0]),
     }
 
 
@@ -185,8 +185,10 @@ def test_mtlm_mask_preserves_temporal_pos_at_masked_temporal_tokens(dummy_batch)
     # because the content path only re-added pos_embedding
     torch.manual_seed(0)
     model = FeatureEmbedding(
-        d_model=32, dropout=0.0,
-        use_temporal_pos=True, use_mask_token=True,
+        d_model=32,
+        dropout=0.0,
+        use_temporal_pos=True,
+        use_mask_token=True,
     )
     model.eval()
     B = 4
@@ -222,8 +224,10 @@ def test_mtlm_mask_preserves_temporal_pos_at_masked_temporal_tokens(dummy_batch)
 def test_mtlm_mask_preserves_temporal_pos_differs_across_months(dummy_batch):
     torch.manual_seed(0)
     model = FeatureEmbedding(
-        d_model=32, dropout=0.0,
-        use_temporal_pos=True, use_mask_token=True,
+        d_model=32,
+        dropout=0.0,
+        use_temporal_pos=True,
+        use_mask_token=True,
     )
     model.eval()
     B = 4
@@ -266,6 +270,7 @@ def test_cat_vocab_sizes_missing_feature_raises():
 
 def test_load_cat_vocab_sizes_lazy_and_matches_defaults():
     from src.tokenization.embedding import load_cat_vocab_sizes
+
     loaded = load_cat_vocab_sizes()
     assert loaded == CAT_VOCAB_SIZES
     assert loaded["SEX"] == 2
@@ -277,16 +282,18 @@ def test_build_temporal_layout_matches_canonical_token_order():
     # drift guard: a TOKEN_ORDER reorder without touching the layout helper
     # would silently mis-target TemporalDecayBias downstream
     from src.tokenization.embedding import build_temporal_layout
+
     layout = build_temporal_layout()
     assert layout == {
-        "pay":     {"positions": [4, 5, 6, 7, 8, 9],         "months": [0, 1, 2, 3, 4, 5]},
-        "bill":    {"positions": [12, 13, 14, 15, 16, 17],   "months": [0, 1, 2, 3, 4, 5]},
-        "pay_amt": {"positions": [18, 19, 20, 21, 22, 23],   "months": [0, 1, 2, 3, 4, 5]},
+        "pay": {"positions": [4, 5, 6, 7, 8, 9], "months": [0, 1, 2, 3, 4, 5]},
+        "bill": {"positions": [12, 13, 14, 15, 16, 17], "months": [0, 1, 2, 3, 4, 5]},
+        "pay_amt": {"positions": [18, 19, 20, 21, 22, 23], "months": [0, 1, 2, 3, 4, 5]},
     }
 
 
 def test_build_temporal_layout_respects_cls_offset_zero():
     from src.tokenization.embedding import build_temporal_layout
+
     layout = build_temporal_layout(cls_offset=0)
     assert layout["pay"]["positions"] == [3, 4, 5, 6, 7, 8]
     assert layout["bill"]["positions"] == [11, 12, 13, 14, 15, 16]

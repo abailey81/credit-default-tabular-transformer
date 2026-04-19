@@ -55,29 +55,29 @@
     {
       "name": "git_clean",
       "passed": true,
-      "detail": "114 tracked changes",
+      "detail": "84 tracked changes",
       "metadata": {
         "dirty_files": [
-          "R  figures/rf_confusion_matrix.png -> figures/baseline/rf_confusion_matrix.png",
-          "R  figures/rf_feature_importance.png -> figures/baseline/rf_feature_importance.png",
-          "R  figures/rf_roc_pr_curves.png -> figures/baseline/rf_roc_pr_curves.png",
-          "R  figures/rf_threshold_analysis.png -> figures/baseline/rf_threshold_analysis.png",
-          "R  figures/rf_tuning_analysis.png -> figures/baseline/rf_tuning_analysis.png",
-          "R  figures/fig01_class_distribution.png -> figures/eda/fig01_class_distribution.png",
-          "R  figures/fig02_categorical_by_target.png -> figures/eda/fig02_categorical_by_target.png",
-          "R  figures/fig03_numerical_distributions.png -> figures/eda/fig03_numerical_distributions.png",
-          "R  figures/fig04_pay_status_analysis.png -> figures/eda/fig04_pay_status_analysis.png",
-          "R  figures/fig05_temporal_trajectories.png -> figures/eda/fig05_temporal_trajectories.png",
-          "R  figures/fig06_utilisation_analysis.png -> figures/eda/fig06_utilisation_analysis.png",
-          "R  figures/fig07_correlation_heatmap.png -> figures/eda/fig07_correlation_heatmap.png",
-          "R  figures/fig08_feature_target_association.png -> figures/eda/fig08_feature_target_association.png",
-          "R  figures/fig09_bill_amt_autocorrelation.png -> figures/eda/fig09_bill_amt_autocorrelation.png",
-          "R  figures/fig10_feature_interactions.png -> figures/eda/fig10_feature_interactions.png",
-          "R  figures/fig11_pay_transitions.png -> figures/eda/fig11_pay_transitions.png",
-          "R  figures/fig13_repayment_ratio.png -> figures/eda/fig13_repayment_ratio.png",
-          "R  figures/calibration_ece_bar.png -> figures/evaluation/calibration/calibration_ece_bar.png",
-          "R  figures/calibration_reliability.png -> figures/evaluation/calibration/calibration_reliability.png",
-          "R  figures/confusion_matrices_transformer.png -> figures/evaluation/comparison/confusion_matrices_transformer.png"
+          " M CHANGELOG.md",
+          " M PROJECT_PLAN.md",
+          " M README.md",
+          " M SECURITY_AUDIT.md",
+          " M data/processed/SPLIT_HASHES.md",
+          " M docs/ARCHITECTURE.md",
+          " M docs/DATA_SHEET.md",
+          " M docs/MODEL_CARD.md",
+          " M docs/REPRODUCIBILITY.md",
+          " M figures/eda/fig01_class_distribution.png",
+          " M figures/eda/fig02_categorical_by_target.png",
+          " M figures/eda/fig03_numerical_distributions.png",
+          " M figures/eda/fig04_pay_status_analysis.png",
+          " M figures/eda/fig05_temporal_trajectories.png",
+          " M figures/eda/fig06_utilisation_analysis.png",
+          " M figures/eda/fig07_correlation_heatmap.png",
+          " M figures/eda/fig08_feature_target_association.png",
+          " M figures/eda/fig09_bill_amt_autocorrelation.png",
+          " M figures/eda/fig10_feature_interactions.png",
+          " M figures/eda/fig11_pay_transitions.png"
         ],
         "is_clean": false
       }
@@ -85,7 +85,7 @@
     {
       "name": "rf_predictions_regenerate",
       "passed": true,
-      "detail": "max |\u0394p| = 0.00e+00 (threshold 1e-6)",
+      "detail": "max |delta p| = 0.00e+00 (threshold 1e-6)",
       "metadata": {
         "max_prob_diff": 0.0
       }

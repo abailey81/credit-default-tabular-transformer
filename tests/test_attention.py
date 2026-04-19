@@ -129,9 +129,9 @@ def test_mha_attn_bias_suppresses_targeted_cell():
     bias[0, 1] = -1e4
     _, w = mha(x, attn_bias=bias)
     suppressed = w[:, :, 0, 1]
-    assert torch.all(suppressed < 1e-3), (
-        f"bias -1e4 at (0,1) did not suppress attention (max={suppressed.max():.4e})"
-    )
+    assert torch.all(
+        suppressed < 1e-3
+    ), f"bias -1e4 at (0,1) did not suppress attention (max={suppressed.max():.4e})"
 
 
 def test_mha_attn_bias_gradient_flows_when_bias_has_requires_grad():

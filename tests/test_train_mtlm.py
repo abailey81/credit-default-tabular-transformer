@@ -14,7 +14,6 @@ REPO = Path(__file__).resolve().parent.parent
 
 from src.models.model import TabularTransformer  # noqa: E402
 from src.models.mtlm import MTLMModel  # noqa: E402
-
 from src.training import train_mtlm as train_mtlm_mod  # noqa: E402
 
 
@@ -53,9 +52,9 @@ def test_build_mtlm_model_returns_mtlm_model_with_expected_prefixes():
     assert len(enc_state) > 0
 
     for key in enc_state:
-        assert key.startswith("embedding.") or key.startswith("encoder."), (
-            f"Unexpected prefix in MTLMModel.encoder_state_dict(): {key!r}"
-        )
+        assert key.startswith("embedding.") or key.startswith(
+            "encoder."
+        ), f"Unexpected prefix in MTLMModel.encoder_state_dict(): {key!r}"
 
 
 def test_encoder_state_dict_loadable_by_tabular_transformer(tmp_path: Path):
@@ -82,11 +81,15 @@ def test_main_smoke_test_produces_all_expected_artefacts(tmp_path: Path):
         pytest.skip("preprocessing outputs not present; run run_pipeline.py first")
 
     output_dir = tmp_path / "mtlm_run"
-    rc = train_mtlm_mod.main([
-        "--seed", "0",
-        "--smoke-test",
-        "--output-dir", str(output_dir),
-    ])
+    rc = train_mtlm_mod.main(
+        [
+            "--seed",
+            "0",
+            "--smoke-test",
+            "--output-dir",
+            str(output_dir),
+        ]
+    )
     assert rc == 0
 
     config = json.loads((output_dir / "config.json").read_text())
@@ -94,6 +97,7 @@ def test_main_smoke_test_produces_all_expected_artefacts(tmp_path: Path):
     assert "param_count" in config
 
     import pandas as _pd
+
     log = _pd.read_csv(output_dir / "pretrain_log.csv")
     assert len(log) > 0
     assert "train_loss" in log.columns
@@ -109,6 +113,6 @@ def test_main_smoke_test_produces_all_expected_artefacts(tmp_path: Path):
     state = torch.load(enc_path, map_location="cpu", weights_only=True)
     assert isinstance(state, dict) and len(state) > 0
     for key in state:
-        assert key.startswith("embedding.") or key.startswith("encoder."), (
-            f"Unexpected prefix in encoder_pretrained.pt: {key!r}"
-        )
+        assert key.startswith("embedding.") or key.startswith(
+            "encoder."
+        ), f"Unexpected prefix in encoder_pretrained.pt: {key!r}"

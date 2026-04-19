@@ -27,8 +27,8 @@ Data ingestion is handled by ``src.data.sources`` which provides a layered,
 provenance-aware loader with API → local-file failover.
 """
 
-import sys
 import argparse
+import sys
 from pathlib import Path
 
 # Force UTF-8 for stdout/stderr on Windows (default cp1251/cp1252 cannot encode
@@ -63,15 +63,18 @@ def _build_parser() -> argparse.ArgumentParser:
 
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument(
-        "--eda-only", action="store_true",
+        "--eda-only",
+        action="store_true",
         help="Run EDA only (generates figures).",
     )
     mode.add_argument(
-        "--preprocess-only", action="store_true",
+        "--preprocess-only",
+        action="store_true",
         help="Run preprocessing only (generates data splits).",
     )
     mode.add_argument(
-        "--rf-benchmark", action="store_true",
+        "--rf-benchmark",
+        action="store_true",
         help="Run Random Forest benchmark only (training + evaluation).",
     )
 
@@ -152,6 +155,7 @@ def main() -> None:
 
     elif args.rf_benchmark:
         from src.baselines.random_forest import run_rf_benchmark
+
         print("=" * 60)
         print("  RUNNING: Random Forest Benchmark")
         print("=" * 60)

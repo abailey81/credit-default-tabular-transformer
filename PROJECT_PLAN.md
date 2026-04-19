@@ -11,7 +11,7 @@
 3. [Phase 1: Data Loading & Cleaning](#3-phase-1-data-loading--cleaning)
 4. [Phase 2: Exploratory Data Analysis](#4-phase-2-exploratory-data-analysis)
 5. [Phase 3: Tokenisation & Embedding Design](#5-phase-3-tokenisation--embedding-design) — incl. §5.4A PLE, §5.4B MLM-compatible masking
-6. [Phase 4: Transformer Architecture](#6-phase-4-transformer-architecture) — incl. §6.11 `src/transformer.py` spec, §6.12 novel inductive biases (N2, N3)
+6. [Phase 4: Transformer Architecture](#6-phase-4-transformer-architecture) — incl. §6.11 `src/models/transformer.py` spec, §6.12 novel inductive biases (N2, N3)
 7. [Phase 5: Loss Functions & Class Imbalance](#7-phase-5-loss-functions--class-imbalance)
 8. [Phase 6: Training Pipeline](#8-phase-6-training-pipeline)
    - 8.5 [Phase 6A: Masked Tabular Language Modelling pretraining (N4)](#85-phase-6a-self-supervised-masked-tabular-language-modelling-novel--n4)
@@ -275,8 +275,8 @@ Full summary statistics table exported as CSV and LaTeX, including mean/std/medi
 
 ## 5. Phase 3: Tokenisation & Embedding Design
 
-**Status: [DONE] COMPLETE** — `src/tokenizer.py` (hybrid PAY state+severity
-tokenisation, Novelty N1, plus `MTLMCollator` for Phase 6A); `src/embedding.py`
+**Status: [DONE] COMPLETE** — `src/tokenization/tokenizer.py` (hybrid PAY state+severity
+tokenisation, Novelty N1, plus `MTLMCollator` for Phase 6A); `src/tokenization/embedding.py`
 (`FeatureEmbedding` with per-feature projections, [CLS] token, optional
 temporal positional encoding for Ablation A7, optional [MASK] token for MTLM
 pretraining — mask content swap preserves both feature positional and temporal
@@ -454,7 +454,7 @@ Position 23: PAY_AMT6      — linear projection + feature-type embed
 **Total sequence length**: 24 tokens (1 CLS + 23 features), each of dimension d.
 **Batch shape**: (B, 24, d) where B is the batch size.
 
-### 5.7 Module: `src/tokeniser.py`
+### 5.7 Module: `src/tokenization/tokenizer.py`
 
 ```python
 class FeatureTokeniser(nn.Module):
@@ -478,15 +478,15 @@ class FeatureTokeniser(nn.Module):
 ## 6. Phase 4: Transformer Architecture
 
 **Status: [DONE] COMPLETE** — every sub-item of Plan §6 is implemented.
-Attention (`src/attention.py`, PR #7; extended with the `attn_bias` hook
-in PR #8) + encoder stack (`src/transformer.py`: `FeedForward`,
+Attention (`src/models/attention.py`, PR #7; extended with the `attn_bias` hook
+in PR #8) + encoder stack (`src/models/transformer.py`: `FeedForward`,
 `TransformerBlock` with independently-ablatable
 `attn_dropout`/`ffn_dropout`/`residual_dropout`, `TemporalDecayBias` =
 Novelty N3, **`FeatureGroupBias` = Novelty N2** — 5×5 learnable bias
 matrix over the {CLS, demographic, PAY, BILL_AMT, PAY_AMT} groups with
 scalar / per_head / off modes, `TransformerEncoder` composing both
 novelty biases via elementwise sum into a single per-forward
-`attn_bias`) + top-level `TabularTransformer` wrapper (`src/model.py`,
+`attn_bias`) + top-level `TabularTransformer` wrapper (`src/models/model.py`,
 §6.7 / §6.10 / §6.11) are all landed. Parameter count at plan defaults:
 **28,417** — on target for the ~28K Plan §6.9 budget. Sophisticated
 helpers on `TabularTransformer`: `summary()`, `parameter_count_by_module()`,
@@ -665,12 +665,12 @@ This is a genuinely tiny model — roughly one parameter per 0.75 training examp
 ### 6.10 Modules
 
 ```
-src/attention.py        — ScaledDotProductAttention, MultiHeadAttention
-src/transformer.py      — TransformerBlock, TransformerEncoder
-src/model.py            — TabularTransformer (full model: tokeniser + encoder + head)
+src/models/attention.py     — ScaledDotProductAttention, MultiHeadAttention
+src/models/transformer.py   — TransformerBlock, TransformerEncoder
+src/models/model.py         — TabularTransformer (full model: tokeniser + encoder + head)
 ```
 
-### 6.11 Implementation Plan: `src/transformer.py`
+### 6.11 Implementation Plan: `src/models/transformer.py`
 
 #### What it does
 
@@ -801,7 +801,7 @@ With probability $p_{\text{drop-block}}$ a whole block's residual sub-layer is s
 
 ## 7. Phase 5: Loss Functions & Class Imbalance
 
-**Status: [DONE] COMPLETE** — `src/losses.py` provides
+**Status: [DONE] COMPLETE** — `src/training/losses.py` provides
 `WeightedBCELoss`, `FocalLoss` (γ and α configurable per Ablation A11;
 `"balanced"` α fitted from the first training batch with the conventional
 caveat) and `LabelSmoothingBCELoss` (ε=0.05 default per §7.3). All three
@@ -841,7 +841,7 @@ with $\epsilon = 0.05$. This prevents the model from becoming overconfident and 
 ### 7.4 Module
 
 ```
-src/losses.py           — FocalLoss, WeightedBCE, label smoothing utilities
+src/training/losses.py  — FocalLoss, WeightedBCE, label smoothing utilities
 ```
 
 ---
@@ -849,12 +849,12 @@ src/losses.py           — FocalLoss, WeightedBCE, label smoothing utilities
 ## 8. Phase 6: Training Pipeline
 
 **Status: [DONE] COMPLETE** — training infrastructure + supervised loop
-all landed: `src/utils.py` (deterministic seeding per §16.5.1, device
+all landed: `src/training/utils.py` (deterministic seeding per §16.5.1, device
 selection, hardened checkpoint save/load with a weights-only default that
 closes SECURITY_AUDIT C-1, `EarlyStopping`, parameter accounting,
-UTF-8-safe logging), `src/dataset.py` (`StratifiedBatchSampler`,
+UTF-8-safe logging), `src/training/dataset.py` (`StratifiedBatchSampler`,
 `make_loader` with supervised / val / test / MTLM modes, reproducible via
-a seeded generator), and **`src/train.py`** (~550 LOC) implementing the
+a seeded generator), and **`src/training/train.py`** (~550 LOC) implementing the
 full Plan §8 spec: AdamW + linear-warmup-plus-cosine LR schedule + grad
 clipping + per-epoch CSV log + `EarlyStopping` on validation AUC-ROC +
 best-weight restore + hardened checkpoint save. Two-stage LR for MTLM
@@ -963,10 +963,10 @@ Plot training curves after completion.
 ### 8.10 Modules
 
 ```
-src/dataset.py          — CreditDefaultDataset (PyTorch Dataset)
-src/train.py            — Training loop, LR schedule, early stopping, logging
-src/losses.py           — FocalLoss, WeightedBCE
-src/utils.py            — Seed setting, device handling, checkpointing
+src/training/dataset.py — CreditDefaultDataset (PyTorch Dataset)
+src/training/train.py   — Training loop, LR schedule, early stopping, logging
+src/training/losses.py  — FocalLoss, WeightedBCE
+src/training/utils.py   — Seed setting, device handling, checkpointing
 ```
 
 ---
@@ -975,16 +975,16 @@ src/utils.py            — Seed setting, device handling, checkpointing
 
 **Status: [DONE] COMPLETE** — all three MTLM components landed:
 
-* **`src/mtlm.py`** (~420 LOC) — `MTLMHead` with per-feature prediction
+* **`src/models/mtlm.py`** (~420 LOC) — `MTLMHead` with per-feature prediction
   heads (3 categorical CE heads + 6 PAY CE heads + 14 numerical MSE heads,
   drift-safe token slicing from `TOKEN_ORDER`), entropy-normalised CE
   + variance-normalised MSE composite loss (`mtlm_loss`), and the
   `MTLMModel` wrapper whose state-dict prefixes (`embedding.*`,
   `encoder.*`) are drop-in for downstream supervised fine-tuning.
-* **`src/train_mtlm.py`** (~440 LOC) — the pretraining loop. Shares the
+* **`src/training/train_mtlm.py`** (~440 LOC) — the pretraining loop. Shares the
   cosine-warmup LR schedule + `EarlyStopping` + checkpoint code paths
-  with `src/train.py`. Produces a tiny ~130 KB `encoder_pretrained.pt`
-  artefact consumed by `train.py --pretrained-encoder PATH`.
+  with `src/training/train.py`. Produces a tiny ~130 KB `encoder_pretrained.pt`
+  artefact consumed by `python -m src.training.train --pretrained-encoder PATH`.
 * **`model.TabularTransformer.load_pretrained_encoder`** generalised to
   accept either a full checkpoint bundle (via `utils.load_checkpoint`,
   weights-only-safe) or a raw state-dict file — the MTLM handoff
@@ -994,7 +994,7 @@ Exercised end-to-end: `results/mtlm/run_42/` contains the full
 pretraining artefact set; validation reconstruction loss dropped from
 3.81 → 1.46 in 12 epochs (early-stopped at epoch 22 of the 50-epoch
 cap). Fine-tuning from the pretrained encoder is then handled by
-`src/train.py --pretrained-encoder …` with the §8.5.5 two-stage LR
+`python -m src.training.train --pretrained-encoder …` with the §8.5.5 two-stage LR
 (`encoder_lr_ratio = 0.2`) — see `results/transformer/seed_42_mtlm_finetune/`
 for the fine-tuned supervised model.
 
@@ -1031,7 +1031,7 @@ The 10%-random and 10%-keep components mitigate the train/inference mismatch whe
 
 ### 8.5.3 Architecture Reuse
 
-The transformer encoder (`src/model.py` TabularTransformer) is shared between pretraining and fine-tuning. Only the **prediction head** changes:
+The transformer encoder (`src/models/model.py` TabularTransformer) is shared between pretraining and fine-tuning. Only the **prediction head** changes:
 
 - Pretraining: replace the `ClassificationHead` with an `MTLMHead` containing one per-feature prediction head (classification heads for categorical / PAY, regression heads for numerical).
 - Fine-tuning: load the pretrained encoder weights, reinstate the `ClassificationHead`, continue training on the supervised task.
@@ -1063,8 +1063,8 @@ After pretraining converges:
 ### 8.5.6 Module
 
 ```
-src/mtlm.py             — MTLMHead, MaskingCollator, pretraining loop
-src/train_mtlm.py       — Pretraining entry point
+src/models/mtlm.py           — MTLMHead, MaskingCollator, pretraining loop
+src/training/train_mtlm.py   — Pretraining entry point
 ```
 
 ### 8.5.7 Expected Outcome
@@ -1097,7 +1097,7 @@ with $\lambda \in \{0.1, 0.3, 0.5\}$ ablated.
 ## 9. Phase 7: Random Forest Benchmark
 
 **Status: [DONE code / TODO results] IMPLEMENTED, NOT YET EXECUTED** —
-`src/random_forest.py` is 870 LOC covering baseline RF, 60-iter
+`src/baselines/random_forest.py` is 870 LOC covering baseline RF, 60-iter
 `RandomizedSearchCV`, dual feature importance (Gini MDI + permutation),
 5-fold stratified CV, threshold optimisation, and five publication figures.
 Running `poetry run python scripts/run_pipeline.py --rf-benchmark --source local`
@@ -1147,14 +1147,14 @@ Random forests provide an Out-of-Bag (OOB) error estimate "for free" — each tr
 ### 9.6 Module
 
 ```
-src/random_forest.py    — RF training, tuning, feature importance, SHAP analysis
+src/baselines/random_forest.py  — RF training, tuning, feature importance, SHAP analysis
 ```
 
 ---
 
 ## 10. Phase 8: Evaluation & Metrics
 
-**Status: [DONE] — `src/evaluate.py` + `src/visualise.py` + `src/rf_predictions.py`. Comparison table at `results/comparison_table.{csv,md}`, five figures in `figures/`. Ensemble row + full RF calibration metrics landed on `feature/phase-11-12-14`.**
+**Status: [DONE] — `src/evaluation/evaluate.py` + `src/evaluation/visualise.py` + `src/baselines/rf_predictions.py`. Comparison table at `results/evaluation/comparison/comparison_table.{csv,md}`, five figures in `figures/evaluation/comparison/`. Ensemble row + full RF calibration metrics landed on `feature/phase-11-12-14`.**
 
 ### 10.1 Comprehensive Metrics Suite
 
@@ -1210,8 +1210,8 @@ Report metrics at both the default 0.5 threshold and the optimised threshold.
 ### 10.5 Module
 
 ```
-src/evaluate.py         — Metric computation, threshold optimisation, comparison tables
-src/visualise.py        — All evaluation plots (ROC, PR, confusion, calibration, training curves)
+src/evaluation/evaluate.py   — Metric computation, threshold optimisation, comparison tables
+src/evaluation/visualise.py  — All evaluation plots (ROC, PR, confusion, calibration, training curves)
 ```
 
 ### 10.6 Additional Advanced Evaluation Components
@@ -1460,11 +1460,11 @@ $$H^{(l,h)}(t) = \mathbb{E}_{x \sim D_{\text{val}}} \left[ -\sum_j A^{(l,h)}_{0,
 ### 12.13 Modules
 
 ```
-src/interpret.py        — Attention extraction, rollout, per-head analysis, embedding viz,
-                          attention entropy, Jain-Wallace diagnostics
-src/ig_shap.py          — Integrated Gradients + KernelSHAP for the transformer
-src/probing.py          — Linear probing of intermediate representations
-src/cka.py              — Cross-layer representation similarity analysis
+src/evaluation/interpret.py  — Attention extraction, rollout, per-head analysis, embedding viz,
+                                attention entropy, Jain-Wallace diagnostics
+src/ig_shap.py               — Integrated Gradients + KernelSHAP for the transformer
+src/probing.py               — Linear probing of intermediate representations
+src/cka.py                   — Cross-layer representation similarity analysis
 ```
 
 ---
@@ -1501,7 +1501,7 @@ src/counterfactuals.py  — Token-substitution counterfactuals + minimum-interve
 
 ## 13. Phase 11: Calibration Analysis
 
-**Status: [DONE] — `src/calibration.py` + `tests/test_calibration.py`: temperature / Platt / isotonic + ECE (equal-width + equal-mass), MCE, Brier decomposition, Brier skill. Raw transformer ECE 0.26 → 0.011 ± 0.003 post-Platt (matches RF's 0.010); AUC unchanged. Artefacts in `results/calibration/` + `figures/calibration_{reliability,ece_bar}.png`.**
+**Status: [DONE] — `src/evaluation/calibration.py` + `tests/test_calibration.py`: temperature / Platt / isotonic + ECE (equal-width + equal-mass), MCE, Brier decomposition, Brier skill. Raw transformer ECE 0.26 → 0.011 ± 0.003 post-Platt (matches RF's 0.010); AUC unchanged. Artefacts in `results/evaluation/calibration/` + `figures/evaluation/calibration/calibration_{reliability,ece_bar}.png`.**
 
 ### 13.1 Why Calibration Matters
 
@@ -1558,14 +1558,14 @@ ECE computed within each demographic subgroup (SEX, EDUCATION category, MARRIAGE
 ### 13.9 Module
 
 ```
-src/calibration.py      — ECE, reliability diagrams, temperature scaling, Brier decomposition
+src/evaluation/calibration.py  — ECE, reliability diagrams, temperature scaling, Brier decomposition
 ```
 
 ---
 
 ## 13.5 Phase 11A: Fairness & Subgroup Robustness (NOVEL — N10)
 
-**Status: [DONE] — `src/fairness.py` + `tests/test_fairness.py` audit SEX / EDUCATION / MARRIAGE on demographic parity, equal opportunity, equalised odds, subgroup AUC/ECE. Male/Female AUC gap = 0.011. EDUCATION "Other" (n=61) flagged underpowered (AUC drop 0.19–0.31), not reported. Artefacts in `results/fairness/{subgroup_metrics,disparity_metrics}.csv` + `figures/fairness_disparity.png` + `figures/fairness_reliability_{sex,education,marriage}.png`.**
+**Status: [DONE] — `src/evaluation/fairness.py` + `tests/test_fairness.py` audit SEX / EDUCATION / MARRIAGE on demographic parity, equal opportunity, equalised odds, subgroup AUC/ECE. Male/Female AUC gap = 0.011. EDUCATION "Other" (n=61) flagged underpowered (AUC drop 0.19–0.31), not reported. Artefacts in `results/evaluation/fairness/{subgroup_metrics,disparity_metrics}.csv` + `figures/evaluation/fairness/fairness_disparity.png` + `figures/evaluation/fairness/fairness_reliability_{sex,education,marriage}.png`.**
 
 Credit scoring is a regulated use-case. A model with high aggregate AUC but disparate performance across protected attributes is legally and ethically problematic. Fairness analysis is also one of the clearest places to demonstrate the "independent thought" criterion.
 
@@ -1601,14 +1601,14 @@ Report disparity metrics before and after mitigation.
 ### 13.5.5 Module
 
 ```
-src/fairness.py         — Subgroup metrics, gap reports, mitigation variants
+src/evaluation/fairness.py  — Subgroup metrics, gap reports, mitigation variants
 ```
 
 ---
 
 ## 13.6 Phase 11B: Uncertainty Quantification (NOVEL — N11)
 
-**Status: [DONE] — `src/uncertainty.py` + `tests/test_uncertainty.py`: MC-dropout (T=50) + predictive / aleatoric entropy + mutual info (BALD) + refuse-to-predict at 5% steps across three uncertainty signals. Predictive entropy ↔ misclassification (Spearman 0.175); deferring top 50% most-uncertain lifts retained AUC 0.779 → 0.850. Artefacts in `results/uncertainty/{mc_dropout.npz,refuse_curve.csv}` + `figures/uncertainty_{refuse_curve,entropy_hist}.png`.**
+**Status: [DONE] — `src/evaluation/uncertainty.py` + `tests/test_uncertainty.py`: MC-dropout (T=50) + predictive / aleatoric entropy + mutual info (BALD) + refuse-to-predict at 5% steps across three uncertainty signals. Predictive entropy ↔ misclassification (Spearman 0.175); deferring top 50% most-uncertain lifts retained AUC 0.779 → 0.850. Artefacts in `results/evaluation/uncertainty/{mc_dropout.npz,refuse_curve.csv}` + `figures/evaluation/uncertainty/uncertainty_{refuse_curve,entropy_hist}.png`.**
 
 A calibrated probability is not the same as a *reliable* probability on a specific input. A model may be 90%-confident on an easy example but only 55%-confident on a hard one — this is **epistemic uncertainty** and is critical in regulated domains where "refuse to predict and escalate to human review" is a valid decision.
 
@@ -1640,14 +1640,14 @@ Train the transformer 5 times with different seeds. Ensemble the predictions. Co
 ### 13.6.5 Module
 
 ```
-src/uncertainty.py      — MC-dropout inference, predictive entropy, selective prediction curves
+src/evaluation/uncertainty.py  — MC-dropout inference, predictive entropy, selective prediction curves
 ```
 
 ---
 
 ## 14. Phase 12: Statistical Significance Testing
 
-**Status: [DONE] — `src/significance.py` + `tests/test_significance.py`: McNemar (exact + chi-sq), DeLong AUC-diff (Sun & Xu 2014), paired bootstrap on arbitrary metrics, BH-FDR correction, Hanley-McNeil power. DeLong RF-vs-transformer AUC p = 0.023 raw, q = 0.23 after BH over 15 pairs → no significant gap claimed. 4,500-row test split has 80% power only for AUC gaps ≥ 0.02. Artefacts in `results/significance/{pairwise_tests,power_analysis}.csv` + `figures/significance_pvalue_heatmap.png`.**
+**Status: [DONE] — `src/evaluation/significance.py` + `tests/test_significance.py`: McNemar (exact + chi-sq), DeLong AUC-diff (Sun & Xu 2014), paired bootstrap on arbitrary metrics, BH-FDR correction, Hanley-McNeil power. DeLong RF-vs-transformer AUC p = 0.023 raw, q = 0.23 after BH over 15 pairs → no significant gap claimed. 4,500-row test split has 80% power only for AUC gaps ≥ 0.02. Artefacts in `results/evaluation/significance/{pairwise_tests,power_analysis}.csv` + `figures/evaluation/significance/significance_pvalue_heatmap.png`.**
 
 ### 14.1 Multi-Run Analysis
 
@@ -2185,7 +2185,7 @@ This audit is intentionally paranoid. Every single requirement stated in the cou
 | 4 | "simply using a neural network and referring to it as a transformer will **not** receive credit" | We will not claim transformer credit for non-attention components; the report explicitly distinguishes encoder (attention) from the classification head (MLP) | ✓ |
 | 5 | "you must **define and justify** how each record is converted into a sequence of tokens" | §5.2 (three strategies analysed); §5.2.3 PAY hybrid with explicit justification from EDA (Fig 04 non-linear risk profile); §5.4A PLE alternative | ✓ |
 | 6 | "Your model must use the attention mechanism as a **central component** of the architecture" | §6.1–6.2 is the core of the model; §6.12 introduces additional *attention* biases (not FFN-only tricks) | ✓ |
-| 7 | "you may use a standard deep-learning framework ... for tensors, automatic differentiation, and optimisation, but the **core attention mechanism and transformer block must be implemented and explained by you**" | §1.2 explicitly restates the rule; `src/attention.py` (ScaledDotProductAttention + MultiHeadAttention) and `src/transformer.py` (TransformerBlock + Encoder) are our own code; no `nn.TransformerEncoder` / `nn.MultiheadAttention` ever imported | ✓ |
+| 7 | "you may use a standard deep-learning framework ... for tensors, automatic differentiation, and optimisation, but the **core attention mechanism and transformer block must be implemented and explained by you**" | §1.2 explicitly restates the rule; `src/models/attention.py` (ScaledDotProductAttention + MultiHeadAttention) and `src/models/transformer.py` (TransformerBlock + Encoder) are our own code; no `nn.TransformerEncoder` / `nn.MultiheadAttention` ever imported | ✓ |
 | 8 | "Using a prebuilt transformer model or any LLM API as part of the modelling, training, or inference pipeline is **not allowed**" | We use PyTorch primitives only (`nn.Linear`, `nn.Embedding`, `nn.LayerNorm`, `nn.Dropout`, `nn.GELU`, `nn.Parameter`). No HuggingFace, no x-transformers, no pre-trained weights, no API calls. | ✓ |
 | 9 | "As a benchmark, you will also build a **random forest** model and **tune its hyperparameters**" | Phase 7 (§9) — `RandomizedSearchCV` with 200 combos × 5-fold CV on a 7-dimension search space | ✓ |
 | 10 | "develop and **compare** two models: (1) transformer, (2) random forest" | §10.4 comprehensive side-by-side comparison table; §14.5 paired bootstrap for $\Delta$; §13.5.2 subgroup parity of the comparison | ✓ |
@@ -2211,7 +2211,7 @@ The PDF lists six explicit sub-requirements (i–vi) that Section 3 must describ
 | i | "how the tabular data are converted into a sequence of tokens" | §5.2 tokenisation strategies; §5.4A PLE; §5.4B MLM-compatible masking; §5.6 full token sequence layout | ✓ |
 | ii | "the embedding design" | §5.2.1 numerical linear/PLE; §5.2.2 categorical lookup; §5.2.3 hybrid PAY (N1); §5.3 feature-type embeddings; §5.5 [CLS] | ✓ |
 | iii | "how queries, keys, values, and attention weights are computed" | §6.1 full mathematical derivation of scaled dot-product; §6.2 multi-head split and re-projection; §6.12.1/2 optional additive biases on scores | ✓ |
-| iv | "the transformer block architecture" | §6.4 PreNorm structure; §6.5 position-wise FFN; §6.11 concrete `src/transformer.py` spec with shapes | ✓ |
+| iv | "the transformer block architecture" | §6.4 PreNorm structure; §6.5 position-wise FFN; §6.11 concrete `src/models/transformer.py` spec with shapes | ✓ |
 | v | "how the model predicts default" | §6.7 [CLS] → LayerNorm → 2-layer MLP → sigmoid; §6.9 full forward-pass diagram | ✓ |
 | vi | "the loss function, optimisation method, and training procedure" | §7 focal loss + WBCE + label smoothing; §8 AdamW, cosine warmup, gradient clipping, early stopping; §8.5 MTLM pretraining (N4); §8.6 multi-task auxiliary (N5) | ✓ |
 

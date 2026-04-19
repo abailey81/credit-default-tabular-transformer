@@ -21,7 +21,10 @@ def _labels(n_pos: int, n_neg: int) -> torch.Tensor:
 def test_stratified_batch_preserves_rate():
     labels = _labels(220, 780)
     sampler = StratifiedBatchSampler(
-        labels=labels, batch_size=100, drop_last=True, shuffle=True,
+        labels=labels,
+        batch_size=100,
+        drop_last=True,
+        shuffle=True,
         generator=torch.Generator().manual_seed(0),
     )
     rates = []
@@ -34,7 +37,10 @@ def test_stratified_batch_preserves_rate():
 def test_stratified_batch_no_duplicates_within_batch():
     labels = _labels(100, 400)
     sampler = StratifiedBatchSampler(
-        labels=labels, batch_size=50, drop_last=True, shuffle=True,
+        labels=labels,
+        batch_size=50,
+        drop_last=True,
+        shuffle=True,
         generator=torch.Generator().manual_seed(1),
     )
     for batch in sampler:
@@ -85,9 +91,7 @@ def test_make_loader_train_mode(small_dataset):
 
 
 def test_make_loader_stratified_variance_small(small_dataset):
-    loader = make_loader(
-        small_dataset, batch_size=64, mode="train", stratified=True, seed=0
-    )
+    loader = make_loader(small_dataset, batch_size=64, mode="train", stratified=True, seed=0)
     rates = [b["label"].mean().item() for b in loader]
     assert len(rates) > 0
     if len(rates) > 1:
@@ -102,9 +106,7 @@ def test_make_loader_val_visits_every_row(small_dataset):
 
 def test_make_loader_mtlm_emits_mask_positions(small_dataset):
     mtlm = MTLMCollator(mask_prob=0.15, seed=0)
-    loader = make_loader(
-        small_dataset, batch_size=32, mode="mtlm", mtlm=mtlm, seed=0
-    )
+    loader = make_loader(small_dataset, batch_size=32, mode="mtlm", mtlm=mtlm, seed=0)
     batch = next(iter(loader))
     assert "mask_positions" in batch
     assert batch["mask_positions"].shape == (32, 23)
@@ -116,7 +118,5 @@ def test_make_loader_rejects_unknown_mode(small_dataset):
 
 
 def test_make_loader_stratified_with_val_ignored(small_dataset):
-    loader = make_loader(
-        small_dataset, batch_size=32, mode="val", stratified=True, seed=0
-    )
+    loader = make_loader(small_dataset, batch_size=32, mode="val", stratified=True, seed=0)
     _ = next(iter(loader))

@@ -92,9 +92,7 @@ def test_checkpoint_roundtrip_trusted():
         opt2 = torch.optim.Adam(model2.parameters(), lr=1e-3)
         loaded = load_checkpoint(p, model2, optimizer=opt2, trust_source=True)
 
-        for (_, v1), (_, v2) in zip(
-            model.state_dict().items(), model2.state_dict().items()
-        ):
+        for (_, v1), (_, v2) in zip(model.state_dict().items(), model2.state_dict().items()):
             assert torch.equal(v1, v2)
         assert loaded["metadata"]["seed"] == 42
 
@@ -109,9 +107,7 @@ def test_checkpoint_roundtrip_safe_default():
         save_checkpoint(p, model, optimizer=opt)
         model2 = torch.nn.Linear(8, 4)
         loaded = load_checkpoint(p, model2)
-        for (_, v1), (_, v2) in zip(
-            model.state_dict().items(), model2.state_dict().items()
-        ):
+        for (_, v1), (_, v2) in zip(model.state_dict().items(), model2.state_dict().items()):
             assert torch.equal(v1, v2)
         assert loaded["metadata"]["seed"] is None
 
@@ -209,5 +205,7 @@ def test_configure_logging_is_idempotent():
     configure_logging()
     import logging
 
-    handlers = [h for h in logging.getLogger().handlers if getattr(h, "_credit_default_handler", False)]
+    handlers = [
+        h for h in logging.getLogger().handlers if getattr(h, "_credit_default_handler", False)
+    ]
     assert len(handlers) == 1

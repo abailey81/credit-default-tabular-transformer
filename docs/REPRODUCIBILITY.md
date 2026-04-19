@@ -4,9 +4,31 @@ What regenerates bit-stably from the committed source, what only
 regenerates up to floating-point tolerance, and what is
 non-deterministic by design.
 
+This document is the reproducibility contract; `docs/ARCHITECTURE.md`
+is the folder layout these paths live under. Every path quoted below
+points to a file whose owning subpackage is listed there.
+
 Run `poetry run python -m src.infra.repro`. Exit 0 means every
 derivative artefact matches its committed copy; exit 1 flags at least
 one regeneration failure. CI uses this as a gate.
+
+## Running everything
+
+Two ways to reproduce the paper from a clean clone:
+
+- **Option A (end-to-end):** `poetry run python scripts/run_all.py`
+  walks the entire pipeline — preprocessing, EDA, RF benchmark,
+  transformer training (3 seeds + MTLM fine-tune), evaluation pack,
+  repro gate — in the order `docs/ARCHITECTURE.md` §3 draws.
+- **Option B (step-by-step):** the individual `python -m src.<pkg>.<mod>`
+  CLIs are still the canonical entry points; `run_all.py` just calls
+  them in sequence. Useful for iterating on one phase without
+  re-training.
+
+Either way, `poetry run python -m src.infra.repro` is the one-line
+verification: it regenerates every derivative artefact from committed
+inputs and confirms bit-parity against the committed copies. Expect
+7/7 PASS on a clean clone.
 
 ## Deterministic (bit-stable on POSIX and Windows)
 

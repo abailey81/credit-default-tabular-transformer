@@ -1,6 +1,22 @@
-"""§4 report figures: ROC, PR, confusion matrices, training curves, reliability.
-Reads per-seed artefacts from train.py; RF appears only as a numeric annotation
-(RF's own plots live in random_forest.py)."""
+"""Five canonical §4 comparison figures built from committed training artefacts.
+
+The figures this module produces:
+
+1. ``roc_curves_transformer.png``           -- ROC per seed + chance line + RF reference annotation.
+2. ``pr_curves_transformer.png``            -- PR per seed + no-skill line at the test base rate.
+3. ``confusion_matrices_transformer.png``   -- 2x2 grid per seed at threshold 0.5.
+4. ``training_curves.png``                  -- train loss + val AUC over epochs, all seeds overlaid.
+5. ``reliability_diagrams.png``             -- all seeds on one axis, shared with the calibration
+                                                 module's equal-width binning.
+
+The module is read-only: it consumes ``test_predictions.npz``,
+``test_metrics.json``, and ``train_log.csv`` written by ``train.py``.
+The RF reference appears as a text annotation rather than a plotted
+curve because the RF module ships its own plots and we don't want to
+redo them with incomplete data (only the headline metrics are loaded).
+
+Styling is Okabe-Ito CVD-safe to match ``src.analysis.eda``.
+"""
 
 from __future__ import annotations
 
@@ -14,7 +30,6 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 from sklearn.metrics import (
-    auc,
     confusion_matrix,
     precision_recall_curve,
     roc_curve,
@@ -23,13 +38,19 @@ from sklearn.metrics import (
 logger = logging.getLogger(__name__)
 
 
-#: pos base rate on the stratified test split → PR no-skill line
+#: Positive base rate on the stratified test split. Determines the
+#: precision-recall no-skill line. Hard-coded rather than computed
+#: on the fly so figures stay bit-identical when regenerated; the
+#: value is asserted against the split hash in ``data/processed/SPLIT_HASHES.md``.
 TEST_BASE_RATE: float = 0.2211
 
-#: matches train.py's ECE bin count
+#: Matches ``train.py``'s default ECE / reliability bin count, so the
+#: reliability diagram here lines up with the numbers quoted in
+#: ``test_metrics.json``.
 RELIABILITY_N_BINS: int = 10
 
-#: keeps the same label for the same seed across every figure
+#: Stable run-directory -> legend-label mapping. Keeps the same seed
+#: labelled the same way across every figure in the report.
 RUN_DISPLAY_NAMES: Dict[str, str] = {
     "seed_42": "Transformer (seed 42)",
     "seed_1": "Transformer (seed 1)",
@@ -37,7 +58,9 @@ RUN_DISPLAY_NAMES: Dict[str, str] = {
     "seed_42_mtlm_finetune": "Transformer + MTLM (seed 42)",
 }
 
-#: Okabe-Ito (CVD-safe), same palette as eda.py
+#: Okabe-Ito (CVD-safe). Exactly the same palette ``src.analysis.eda``
+#: uses for the default-vs-non-default contrast, to keep figure aesthetics
+#: consistent between the EDA and the evaluation chapters.
 RUN_COLOURS: Dict[str, str] = {
     "seed_42": "#0072B2",
     "seed_1": "#D55E00",
@@ -48,10 +71,17 @@ RUN_COLOURS: Dict[str, str] = {
 DEFAULT_FIG_DPI: int = 150
 
 
+# ---------------------------------------------------------------------------
 # I/O
+# ---------------------------------------------------------------------------
+
 
 def load_predictions(run_dir: Path) -> Dict[str, Any]:
-    """test preds + test metrics for one run."""
+    """Load per-row test predictions and their headline metrics for one run.
+
+    Returns a single flat dict -- the plotting helpers pull what they need
+    by key rather than passing arrays around individually.
+    """
     run_dir = Path(run_dir)
     preds = np.load(run_dir / "test_predictions.npz")
     metrics = json.loads((run_dir / "test_metrics.json").read_text())
@@ -66,11 +96,17 @@ def load_predictions(run_dir: Path) -> Dict[str, Any]:
 
 
 def load_training_log(run_dir: Path) -> pd.DataFrame:
+    """Read the per-epoch training log CSV ``train.py`` writes."""
     return pd.read_csv(Path(run_dir) / "train_log.csv")
 
 
 def load_rf_reference(csv_path: Path) -> Optional[Dict[str, float]]:
-    """tuned RF {auc_roc, auc_pr} or None if CSV missing."""
+    """Pick out the RF_tuned row from ``rf_metrics.csv`` for annotation.
+
+    Returns ``None`` when the CSV or the row is missing; the callers then
+    simply skip the RF annotation rather than failing. We map the CSV's
+    ``avg_precision`` column onto the module-internal ``auc_pr`` name.
+    """
     csv_path = Path(csv_path)
     if not csv_path.is_file():
         return None
@@ -83,36 +119,52 @@ def load_rf_reference(csv_path: Path) -> Optional[Dict[str, float]]:
 
 
 def _style(run_name: str) -> Tuple[str, str]:
-    """(label, colour) — same mapping across every figure."""
+    """Return (legend label, line colour) for a run directory name.
+
+    Unknown runs fall back to mid-grey so they're visible but visually
+    demoted relative to the canonical seeds in the report.
+    """
     label = RUN_DISPLAY_NAMES.get(run_name, run_name)
     colour = RUN_COLOURS.get(run_name, "#555555")
     return label, colour
 
 
+# ---------------------------------------------------------------------------
 # ROC curves
+# ---------------------------------------------------------------------------
+
 
 def plot_roc_curves(
     runs: List[Dict[str, Any]],
     rf_ref: Optional[Dict[str, float]],
     out_path: Path,
 ) -> None:
+    """ROC per seed plus chance diagonal and RF text annotation.
+
+    RF appears as an annotated number, not a plotted curve, because the
+    RF baseline ships its own figures (with its own training set up,
+    engineered features, etc.) and we don't want to misrepresent it on
+    axes drawn for the transformer.
+    """
     fig, ax = plt.subplots(figsize=(7, 6))
 
     for run in runs:
         fpr, tpr, _ = roc_curve(run["y_true"], run["y_prob"])
         label, colour = _style(run["run_name"])
-        ax.plot(fpr, tpr, color=colour, linewidth=1.8,
-                label=f"{label} (AUC = {run['auc_roc']:.3f})")
+        ax.plot(
+            fpr, tpr, color=colour, linewidth=1.8, label=f"{label} (AUC = {run['auc_roc']:.3f})"
+        )
 
-    ax.plot([0, 1], [0, 1], linestyle="--", linewidth=1.0,
-            color="#999999", label="Chance")
+    ax.plot([0, 1], [0, 1], linestyle="--", linewidth=1.0, color="#999999", label="Chance")
 
-    # RF: text annotation only (no raw probs loaded here)
     if rf_ref is not None:
-        ax.text(0.60, 0.08,
-                f"RF (tuned): AUC = {rf_ref['auc_roc']:.3f}",
-                fontsize=10,
-                bbox=dict(facecolor="white", edgecolor="#999999", boxstyle="round,pad=0.3"))
+        ax.text(
+            0.60,
+            0.08,
+            f"RF (tuned): AUC = {rf_ref['auc_roc']:.3f}",
+            fontsize=10,
+            bbox=dict(facecolor="white", edgecolor="#999999", boxstyle="round,pad=0.3"),
+        )
 
     ax.set_xlabel("False Positive Rate")
     ax.set_ylabel("True Positive Rate")
@@ -127,30 +179,50 @@ def plot_roc_curves(
     plt.close(fig)
 
 
+# ---------------------------------------------------------------------------
 # Precision-Recall curves
+# ---------------------------------------------------------------------------
+
 
 def plot_pr_curves(
     runs: List[Dict[str, Any]],
     rf_ref: Optional[Dict[str, float]],
     out_path: Path,
 ) -> None:
+    """Precision-Recall per seed plus the no-skill line and RF annotation.
+
+    The no-skill line is the positive class base rate, not 0.5 -- on a
+    22% positive dataset, a random classifier hits ``AP = 0.22``, not 0.5.
+    """
     fig, ax = plt.subplots(figsize=(7, 6))
 
     for run in runs:
         precision, recall, _ = precision_recall_curve(run["y_true"], run["y_prob"])
         label, colour = _style(run["run_name"])
-        ax.plot(recall, precision, color=colour, linewidth=1.8,
-                label=f"{label} (AP = {run['auc_pr']:.3f})")
+        ax.plot(
+            recall,
+            precision,
+            color=colour,
+            linewidth=1.8,
+            label=f"{label} (AP = {run['auc_pr']:.3f})",
+        )
 
-    ax.axhline(TEST_BASE_RATE, linestyle="--", linewidth=1.0,
-               color="#999999",
-               label=f"No-skill ({TEST_BASE_RATE:.3f})")
+    ax.axhline(
+        TEST_BASE_RATE,
+        linestyle="--",
+        linewidth=1.0,
+        color="#999999",
+        label=f"No-skill ({TEST_BASE_RATE:.3f})",
+    )
 
     if rf_ref is not None:
-        ax.text(0.40, 0.90,
-                f"RF (tuned): AP = {rf_ref['auc_pr']:.3f}",
-                fontsize=10,
-                bbox=dict(facecolor="white", edgecolor="#999999", boxstyle="round,pad=0.3"))
+        ax.text(
+            0.40,
+            0.90,
+            f"RF (tuned): AP = {rf_ref['auc_pr']:.3f}",
+            fontsize=10,
+            bbox=dict(facecolor="white", edgecolor="#999999", boxstyle="round,pad=0.3"),
+        )
 
     ax.set_xlabel("Recall")
     ax.set_ylabel("Precision")
@@ -165,9 +237,19 @@ def plot_pr_curves(
     plt.close(fig)
 
 
+# ---------------------------------------------------------------------------
 # Confusion matrices
+# ---------------------------------------------------------------------------
+
 
 def plot_confusion_matrices(runs: List[Dict[str, Any]], out_path: Path) -> None:
+    """Grid of 2x2 confusion matrices, one subplot per run.
+
+    Cell text switches to white once the count exceeds half the matrix max
+    so the numbers stay legible across the blue colour ramp. Fixed
+    ``labels=[0, 1]`` guards against runs that never predict the positive
+    class collapsing to a 1x1 matrix.
+    """
     n = len(runs)
     ncols = min(2, n)
     nrows = int(np.ceil(n / ncols))
@@ -180,10 +262,15 @@ def plot_confusion_matrices(runs: List[Dict[str, Any]], out_path: Path) -> None:
         thresh = cm.max() / 2.0
         for i in range(2):
             for j in range(2):
-                ax.text(j, i, str(cm[i, j]),
-                        ha="center", va="center",
-                        color="white" if cm[i, j] > thresh else "black",
-                        fontsize=11)
+                ax.text(
+                    j,
+                    i,
+                    str(cm[i, j]),
+                    ha="center",
+                    va="center",
+                    color="white" if cm[i, j] > thresh else "black",
+                    fontsize=11,
+                )
 
         label, _ = _style(run["run_name"])
         ax.set_title(label, fontsize=10)
@@ -195,7 +282,8 @@ def plot_confusion_matrices(runs: List[Dict[str, Any]], out_path: Path) -> None:
         ax.set_ylabel("Actual")
         fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
 
-    for ax in axes[len(runs):]:
+    # Blank out any trailing slots when n is not a multiple of ncols.
+    for ax in axes[len(runs) :]:
         ax.set_visible(False)
 
     fig.suptitle("Confusion matrices at the default 0.5 threshold", fontsize=12)
@@ -204,23 +292,30 @@ def plot_confusion_matrices(runs: List[Dict[str, Any]], out_path: Path) -> None:
     plt.close(fig)
 
 
+# ---------------------------------------------------------------------------
 # Training curves
+# ---------------------------------------------------------------------------
+
 
 def plot_training_curves(
     run_dirs: List[Path],
     out_path: Path,
 ) -> None:
-    """2-panel: train loss (L), val AUC (R)."""
+    """Two-panel training diagnostic: train loss (left) + val AUC-ROC (right).
+
+    Overlays every seed so divergence across seeds is visible at a glance
+    -- a flat line on the right with a climbing line on the left is the
+    classic "not actually learning" failure mode we want the report to
+    catch early.
+    """
     fig, (ax_loss, ax_auc) = plt.subplots(1, 2, figsize=(12, 5))
 
     for run_dir in run_dirs:
         run_dir = Path(run_dir)
         log = load_training_log(run_dir)
         label, colour = _style(run_dir.name)
-        ax_loss.plot(log["epoch"], log["train_loss"],
-                     color=colour, linewidth=1.6, label=label)
-        ax_auc.plot(log["epoch"], log["val_auc_roc"],
-                    color=colour, linewidth=1.6, label=label)
+        ax_loss.plot(log["epoch"], log["train_loss"], color=colour, linewidth=1.6, label=label)
+        ax_auc.plot(log["epoch"], log["val_auc_roc"], color=colour, linewidth=1.6, label=label)
 
     ax_loss.set_xlabel("Epoch")
     ax_loss.set_ylabel("Training loss")
@@ -239,20 +334,29 @@ def plot_training_curves(
     plt.close(fig)
 
 
+# ---------------------------------------------------------------------------
 # Reliability diagrams
+# ---------------------------------------------------------------------------
+
 
 def _reliability_bins(
     y_true: np.ndarray,
     y_prob: np.ndarray,
     n_bins: int = RELIABILITY_N_BINS,
 ) -> Tuple[np.ndarray, np.ndarray]:
-    """equal-width prob bins → (mean p, observed pos rate) per populated bin."""
+    """Per-bin (mean predicted probability, observed positive rate).
+
+    Equal-width bins to match :mod:`src.evaluation.calibration`'s default.
+    Last bin is right-inclusive so a prediction of exactly 1.0 lands
+    somewhere; otherwise the rightmost bin would always be empty.
+    Empty bins are skipped rather than plotted at 0, which would bend the
+    curve toward the origin artificially.
+    """
     edges = np.linspace(0.0, 1.0, n_bins + 1)
     means = []
     rates = []
     for i in range(n_bins):
         lo, hi = edges[i], edges[i + 1]
-        # last bin is right-inclusive so p=1.0 lands somewhere
         in_bin = (y_prob >= lo) & (y_prob < hi if i < n_bins - 1 else y_prob <= hi)
         if not in_bin.any():
             continue
@@ -262,16 +366,22 @@ def _reliability_bins(
 
 
 def plot_reliability_diagrams(runs: List[Dict[str, Any]], out_path: Path) -> None:
+    """All seeds on one axis so over-confidence is visible at a glance.
+
+    The module ``calibration`` handles the per-calibrator breakdown; here
+    we only show raw probabilities (no post-hoc T / Platt) because this
+    figure is meant to motivate the calibration chapter, not pre-empt it.
+    """
     fig, ax = plt.subplots(figsize=(7, 6))
 
-    ax.plot([0, 1], [0, 1], linestyle="--", linewidth=1.0,
-            color="#999999", label="Perfect calibration")
+    ax.plot(
+        [0, 1], [0, 1], linestyle="--", linewidth=1.0, color="#999999", label="Perfect calibration"
+    )
 
     for run in runs:
         means, rates = _reliability_bins(run["y_true"], run["y_prob"])
         label, colour = _style(run["run_name"])
-        ax.plot(means, rates, marker="o", color=colour, linewidth=1.6,
-                markersize=5, label=label)
+        ax.plot(means, rates, marker="o", color=colour, linewidth=1.6, markersize=5, label=label)
 
     ax.set_xlabel("Mean predicted probability (bin)")
     ax.set_ylabel("Observed default rate (bin)")
@@ -286,7 +396,10 @@ def plot_reliability_diagrams(runs: List[Dict[str, Any]], out_path: Path) -> Non
     plt.close(fig)
 
 
+# ---------------------------------------------------------------------------
 # CLI
+# ---------------------------------------------------------------------------
+
 
 def _build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
@@ -294,7 +407,9 @@ def _build_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     p.add_argument(
-        "--runs", nargs="+", type=Path,
+        "--runs",
+        nargs="+",
+        type=Path,
         default=[
             Path("results/transformer/seed_42"),
             Path("results/transformer/seed_1"),
@@ -302,14 +417,18 @@ def _build_parser() -> argparse.ArgumentParser:
             Path("results/transformer/seed_42_mtlm_finetune"),
         ],
         help="Training run directories. Must each contain test_predictions.npz, "
-             "test_metrics.json, and train_log.csv.",
+        "test_metrics.json, and train_log.csv.",
     )
     p.add_argument(
-        "--rf", type=Path, default=Path("results/baseline/rf_metrics.csv"),
+        "--rf",
+        type=Path,
+        default=Path("results/baseline/rf_metrics.csv"),
         help="RF metrics CSV (used for reference annotations on the ROC / PR plots).",
     )
     p.add_argument(
-        "--output-dir", type=Path, default=Path("figures/evaluation/comparison"),
+        "--output-dir",
+        type=Path,
+        default=Path("figures/evaluation/comparison"),
         help="Directory to write the PNG files into.",
     )
     return p
@@ -342,17 +461,13 @@ def main(argv: Optional[List[str]] = None) -> int:
     rf_ref = load_rf_reference(args.rf)
     args.output_dir.mkdir(parents=True, exist_ok=True)
 
+    # Filename -> callable mapping; add a row here to add a figure.
     targets = [
-        ("roc_curves_transformer.png",
-         lambda p: plot_roc_curves(runs, rf_ref, p)),
-        ("pr_curves_transformer.png",
-         lambda p: plot_pr_curves(runs, rf_ref, p)),
-        ("confusion_matrices_transformer.png",
-         lambda p: plot_confusion_matrices(runs, p)),
-        ("training_curves.png",
-         lambda p: plot_training_curves(run_dirs, p)),
-        ("reliability_diagrams.png",
-         lambda p: plot_reliability_diagrams(runs, p)),
+        ("roc_curves_transformer.png", lambda p: plot_roc_curves(runs, rf_ref, p)),
+        ("pr_curves_transformer.png", lambda p: plot_pr_curves(runs, rf_ref, p)),
+        ("confusion_matrices_transformer.png", lambda p: plot_confusion_matrices(runs, p)),
+        ("training_curves.png", lambda p: plot_training_curves(run_dirs, p)),
+        ("reliability_diagrams.png", lambda p: plot_reliability_diagrams(runs, p)),
     ]
 
     for filename, render in targets:

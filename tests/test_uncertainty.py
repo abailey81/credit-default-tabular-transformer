@@ -16,8 +16,7 @@ from src.evaluation import uncertainty as un  # noqa: E402
 
 
 def test_enable_dropout_flips_only_dropout_modules():
-    m = nn.Sequential(nn.Linear(4, 4), nn.Dropout(0.1),
-                      nn.LayerNorm(4), nn.Dropout(0.2))
+    m = nn.Sequential(nn.Linear(4, 4), nn.Dropout(0.1), nn.LayerNorm(4), nn.Dropout(0.2))
     m.eval()
     for mod in m:
         assert mod.training is False
@@ -109,7 +108,8 @@ def test_refuse_curve_is_monotone_on_informative_signal():
     noise_level = rng.uniform(0.0, 0.4, size=N)
     probs = np.clip(
         base + noise_level[None, :] * rng.standard_normal((T, N)),
-        0.01, 0.99,
+        0.01,
+        0.99,
     )
     u = un.uncertainty_from_samples(probs, y)
     df = un.refuse_curve(u, signal="predictive_entropy")
@@ -121,9 +121,12 @@ def test_refuse_curve_is_monotone_on_informative_signal():
 
 def test_refuse_curve_rejects_unknown_signal():
     u = un.UncertaintyArrays(
-        mean=np.zeros(10), std=np.zeros(10),
-        predictive_entropy=np.zeros(10), aleatoric=np.zeros(10),
-        mutual_info=np.zeros(10), y_true=np.zeros(10, dtype=int),
+        mean=np.zeros(10),
+        std=np.zeros(10),
+        predictive_entropy=np.zeros(10),
+        aleatoric=np.zeros(10),
+        mutual_info=np.zeros(10),
+        y_true=np.zeros(10, dtype=int),
     )
     with pytest.raises(ValueError):
         un.refuse_curve(u, signal="nope")
@@ -132,16 +135,21 @@ def test_refuse_curve_rejects_unknown_signal():
 def test_main_end_to_end(tmp_path):
     seed_42 = REPO / "results" / "transformer" / "seed_42"
     proc = REPO / "data" / "processed"
-    if (not (seed_42 / "best.pt").is_file()
-            or not (proc / "test_scaled.csv").is_file()):
+    if not (seed_42 / "best.pt").is_file() or not (proc / "test_scaled.csv").is_file():
         pytest.skip("no committed checkpoint or preprocessing outputs")
-    rc = un.main([
-        "--run", str(seed_42),
-        "--n-samples", "5",
-        "--output-dir", str(tmp_path / "out"),
-        "--figures-dir", str(tmp_path / "fig"),
-    ])
+    rc = un.main(
+        [
+            "--run",
+            str(seed_42),
+            "--n-samples",
+            "5",
+            "--output-dir",
+            str(tmp_path / "out"),
+            "--figures-dir",
+            str(tmp_path / "fig"),
+        ]
+    )
     assert rc == 0
     assert (tmp_path / "out" / "mc_dropout.npz").is_file()
-    summary = (tmp_path / "out" / "uncertainty_summary.json")
+    summary = tmp_path / "out" / "uncertainty_summary.json"
     assert summary.is_file()
