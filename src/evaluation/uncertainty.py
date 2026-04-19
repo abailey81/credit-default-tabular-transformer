@@ -458,7 +458,7 @@ def _build_parser() -> argparse.ArgumentParser:
         default=Path("results/transformer/seed_42"),
         help="Run dir with best.pt + config.json.",
     )
-    p.add_argument("--test-csv", type=Path, default=Path("data/processed/test_scaled.csv"))
+    p.add_argument("--test-csv", type=Path, default=Path("data/processed/splits/test_scaled.csv"))
     p.add_argument("--metadata", type=Path, default=Path("data/processed/feature_metadata.json"))
     p.add_argument("--n-samples", type=int, default=50, help="Number of MC-dropout passes.")
     p.add_argument("--batch-size", type=int, default=256)

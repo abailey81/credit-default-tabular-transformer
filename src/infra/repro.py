@@ -166,10 +166,10 @@ def check_artefacts_exist(repo: Path) -> Check:
         "results/evaluation/comparison/comparison_table.csv",
         "results/evaluation/comparison/comparison_table.md",
         "results/evaluation/comparison/evaluate_summary.json",
-        "data/processed/train_scaled.csv",
-        "data/processed/val_scaled.csv",
-        "data/processed/test_scaled.csv",
-        "data/processed/test_raw.csv",
+        "data/processed/splits/train_scaled.csv",
+        "data/processed/splits/val_scaled.csv",
+        "data/processed/splits/test_scaled.csv",
+        "data/processed/splits/test_raw.csv",
         "data/processed/feature_metadata.json",
     ]
     missing = [r for r in required if not (repo / r).is_file()]
@@ -313,13 +313,19 @@ def check_rf_predictions_regenerate(repo: Path, scratch: Path) -> Check:
 
 
 def check_split_hashes_match(repo: Path) -> Check:
-    """Compare SHA-256 of ``data/processed/*`` splits against
+    """Compare SHA-256 of ``data/processed/`` artefacts against
     ``SPLIT_HASHES.md``.
 
     A miss here is the single most important signal in this whole module:
     if the splits have drifted, *every* downstream metric is computed on
     different rows and all comparisons are unsafe. It is the one check
     that is worth fixing before any other failing check.
+
+    Lookup strategy: the hash ledger is keyed by bare filename (e.g.
+    ``train_raw.csv``). After the 2026 reorg the split CSVs live under
+    ``data/processed/splits/`` while the metadata JSON stays at
+    ``data/processed/``. We probe both locations in a deterministic order
+    (splits first, then root) so either layout round-trips cleanly.
     """
     import re
 
@@ -345,12 +351,19 @@ def check_split_hashes_match(repo: Path) -> Check:
             detail="no hash rows parsed from SPLIT_HASHES.md",
         )
 
-    data_dir = repo / "data" / "processed"
+    processed_root = repo / "data" / "processed"
+    probe_dirs = (processed_root / "splits", processed_root)
+
     mismatches: List[str] = []
     checked: List[str] = []
     for name, want in expected.items():
-        path = data_dir / name
-        if not path.is_file():
+        path: Optional[Path] = None
+        for d in probe_dirs:
+            candidate = d / name
+            if candidate.is_file():
+                path = candidate
+                break
+        if path is None:
             mismatches.append(f"{name}: missing")
             continue
         got = _sha256(path)

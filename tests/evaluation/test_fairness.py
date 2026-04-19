@@ -9,7 +9,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-REPO = Path(__file__).resolve().parent.parent
+REPO = Path(__file__).resolve().parent.parent.parent
 
 from src.evaluation import fairness as fa  # noqa: E402
 
@@ -76,7 +76,7 @@ def test_attribute_labels_exposed():
 
 def test_main_end_to_end(tmp_path):
     seed_42 = REPO / "results" / "transformer" / "seed_42"
-    test_raw = REPO / "data" / "processed" / "test_raw.csv"
+    test_raw = REPO / "data" / "processed" / "splits" / "test_raw.csv"
     if not (seed_42 / "test_predictions.npz").is_file() or not test_raw.is_file():
         pytest.skip("no committed transformer runs or preprocessing")
     rc = fa.main(

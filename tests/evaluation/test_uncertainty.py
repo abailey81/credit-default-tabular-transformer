@@ -10,7 +10,7 @@ import pytest
 import torch
 import torch.nn as nn
 
-REPO = Path(__file__).resolve().parent.parent
+REPO = Path(__file__).resolve().parent.parent.parent
 
 from src.evaluation import uncertainty as un  # noqa: E402
 
@@ -135,7 +135,7 @@ def test_refuse_curve_rejects_unknown_signal():
 def test_main_end_to_end(tmp_path):
     seed_42 = REPO / "results" / "transformer" / "seed_42"
     proc = REPO / "data" / "processed"
-    if not (seed_42 / "best.pt").is_file() or not (proc / "test_scaled.csv").is_file():
+    if not (seed_42 / "best.pt").is_file() or not (proc / "splits" / "test_scaled.csv").is_file():
         pytest.skip("no committed checkpoint or preprocessing outputs")
     rc = un.main(
         [

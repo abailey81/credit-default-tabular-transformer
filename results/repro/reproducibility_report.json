@@ -15,10 +15,10 @@
           "results/evaluation/comparison/comparison_table.csv",
           "results/evaluation/comparison/comparison_table.md",
           "results/evaluation/comparison/evaluate_summary.json",
-          "data/processed/train_scaled.csv",
-          "data/processed/val_scaled.csv",
-          "data/processed/test_scaled.csv",
-          "data/processed/test_raw.csv",
+          "data/processed/splits/train_scaled.csv",
+          "data/processed/splits/val_scaled.csv",
+          "data/processed/splits/test_scaled.csv",
+          "data/processed/splits/test_raw.csv",
           "data/processed/feature_metadata.json"
         ]
       }
@@ -55,29 +55,29 @@
     {
       "name": "git_clean",
       "passed": true,
-      "detail": "84 tracked changes",
+      "detail": "87 tracked changes",
       "metadata": {
         "dirty_files": [
-          " M CHANGELOG.md",
+          " M .gitignore",
           " M PROJECT_PLAN.md",
-          " M README.md",
-          " M SECURITY_AUDIT.md",
           " M data/processed/SPLIT_HASHES.md",
-          " M docs/ARCHITECTURE.md",
-          " M docs/DATA_SHEET.md",
-          " M docs/MODEL_CARD.md",
-          " M docs/REPRODUCIBILITY.md",
-          " M figures/eda/fig01_class_distribution.png",
-          " M figures/eda/fig02_categorical_by_target.png",
-          " M figures/eda/fig03_numerical_distributions.png",
-          " M figures/eda/fig04_pay_status_analysis.png",
-          " M figures/eda/fig05_temporal_trajectories.png",
-          " M figures/eda/fig06_utilisation_analysis.png",
-          " M figures/eda/fig07_correlation_heatmap.png",
-          " M figures/eda/fig08_feature_target_association.png",
-          " M figures/eda/fig09_bill_amt_autocorrelation.png",
-          " M figures/eda/fig10_feature_interactions.png",
-          " M figures/eda/fig11_pay_transitions.png"
+          " M notebooks/02_data_preprocessing.ipynb",
+          " M notebooks/04_train_transformer.ipynb",
+          " M results/repro/reproducibility_report.json",
+          " M src/baselines/rf_predictions.py",
+          " M src/data/preprocessing.py",
+          " M src/evaluation/fairness.py",
+          " M src/evaluation/uncertainty.py",
+          " M src/infra/repro.py",
+          " M src/models/model.py",
+          " M src/tokenization/tokenizer.py",
+          " M src/training/dataset.py",
+          " M src/training/train.py",
+          " M src/training/train_mtlm.py",
+          "RM tests/test_rf_predictions.py -> tests/baselines/test_rf_predictions.py",
+          " M tests/conftest.py",
+          "RM tests/test_calibration.py -> tests/evaluation/test_calibration.py",
+          "RM tests/test_evaluate_ensemble.py -> tests/evaluation/test_evaluate_ensemble.py"
         ],
         "is_clean": false
       }

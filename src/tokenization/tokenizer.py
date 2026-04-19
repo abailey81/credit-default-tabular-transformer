@@ -786,7 +786,7 @@ if __name__ == "__main__":
 
     root = Path(__file__).resolve().parent.parent.parent
     meta_path = root / "data/processed/feature_metadata.json"
-    csv_path = root / "data/processed/train_scaled.csv"
+    csv_path = root / "data/processed/splits/train_scaled.csv"
     if not meta_path.is_file() or not csv_path.is_file():
         print(
             "[SKIP] tokenizer.py smoke test requires preprocessing output.\n"

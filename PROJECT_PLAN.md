@@ -220,9 +220,9 @@ The values -2, -1, 0 are **qualitatively different states**, not points on a sca
 
 ### 3.2 Outputs
 
-- `data/processed/train_raw.csv`, `val_raw.csv`, `test_raw.csv` — unscaled splits
-- `data/processed/train_scaled.csv`, `val_scaled.csv`, `test_scaled.csv` — scaled splits
-- `data/processed/train_engineered.csv`, `val_engineered.csv`, `test_engineered.csv` — with derived features
+- `data/processed/splits/train_raw.csv`, `val_raw.csv`, `test_raw.csv` — unscaled splits
+- `data/processed/splits/train_scaled.csv`, `val_scaled.csv`, `test_scaled.csv` — scaled splits
+- `data/processed/splits/train_engineered.csv`, `val_engineered.csv`, `test_engineered.csv` — with derived features
 - `data/processed/feature_metadata.json` — tokeniser metadata
 - `data/processed/validation_report.json` — data quality report
 

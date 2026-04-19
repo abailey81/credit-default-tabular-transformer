@@ -15,7 +15,7 @@ from typing import Any, Dict
 import numpy as np
 import pytest
 
-REPO = Path(__file__).resolve().parent.parent
+REPO = Path(__file__).resolve().parent.parent.parent
 
 from src.evaluation import interpret as interp  # noqa: E402
 

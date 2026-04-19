@@ -5,6 +5,14 @@ on their disk and compare here to confirm they have the same bytes we
 trained and evaluated on. `src/infra/repro.py`'s `split_hashes_match` check
 fails if anything drifts.
 
+## Layout
+
+The nine split CSVs live under `data/processed/splits/`; `feature_metadata.json`
+sits at `data/processed/` root. `check_split_hashes_match` probes both
+locations so the ledger below keys on bare filenames — this row format
+(`` | `filename` | `sha256` | ``) is parsed by a regex in `repro.py`, do
+not change it.
+
 ## SHA-256
 
 | File | SHA-256 |
@@ -30,7 +38,7 @@ python -m src.infra.repro
 Or manually:
 
 ```bash
-sha256sum data/processed/*.csv data/processed/feature_metadata.json
+sha256sum data/processed/splits/*.csv data/processed/feature_metadata.json
 ```
 
 A mismatch means the split was regenerated under different

@@ -9,7 +9,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-REPO = Path(__file__).resolve().parent.parent
+REPO = Path(__file__).resolve().parent.parent.parent
 
 from src.baselines import rf_predictions as rf  # noqa: E402
 
@@ -97,7 +97,7 @@ def test_save_predictions_writes_files(tmp_path):
 def test_main_against_committed_data():
     cfg = REPO / "results" / "baseline" / "rf_config.json"
     proc = REPO / "data" / "processed"
-    if not (cfg.is_file() and (proc / "train_engineered.csv").is_file()):
+    if not (cfg.is_file() and (proc / "splits" / "train_engineered.csv").is_file()):
         pytest.skip("no committed rf_config or engineered data")
     # scratch dir — leave committed results/rf alone
     import tempfile

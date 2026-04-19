@@ -16,6 +16,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 DATA_DIR = REPO_ROOT / "data" / "processed"
+SPLITS_DIR = DATA_DIR / "splits"
 
 
 @pytest.fixture(scope="session")
@@ -36,7 +37,7 @@ def metadata() -> Dict:
 
 @pytest.fixture(scope="session")
 def train_df(repo_root) -> pd.DataFrame:
-    path = DATA_DIR / "train_scaled.csv"
+    path = SPLITS_DIR / "train_scaled.csv"
     if not path.is_file():
         pytest.skip(f"train_scaled.csv missing at {path}")
     return pd.read_csv(path)

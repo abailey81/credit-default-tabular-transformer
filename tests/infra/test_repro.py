@@ -8,7 +8,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-REPO = Path(__file__).resolve().parent.parent
+REPO = Path(__file__).resolve().parent.parent.parent
 
 from src.infra import repro  # noqa: E402
 

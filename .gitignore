@@ -29,6 +29,7 @@ data/raw/*.xls
 data/raw/*.xlsx
 data/raw/*.csv
 data/processed/*.csv
+data/processed/splits/*.csv
 
 # Manual fallback dataset — *tracked* so the offline loader has something
 # to fall back to when the UCI API is unreachable.

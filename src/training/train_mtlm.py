@@ -208,8 +208,8 @@ def _load_splits(
     """train + val + meta. test is reserved for supervised eval."""
     meta_path = _REPO / "data/processed/feature_metadata.json"
     paths = {
-        "train": _REPO / "data/processed/train_scaled.csv",
-        "val": _REPO / "data/processed/val_scaled.csv",
+        "train": _REPO / "data/processed/splits/train_scaled.csv",
+        "val": _REPO / "data/processed/splits/val_scaled.csv",
     }
     missing = [str(p) for p in (meta_path, *paths.values()) if not p.is_file()]
     if missing:

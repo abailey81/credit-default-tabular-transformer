@@ -14,7 +14,7 @@ import torch
 import torch.nn as nn
 from torch.optim import AdamW
 
-REPO = Path(__file__).resolve().parent.parent
+REPO = Path(__file__).resolve().parent.parent.parent
 
 from src.models.model import TabularTransformer  # noqa: E402
 from src.training import train as train_mod  # noqa: E402
@@ -322,7 +322,7 @@ def test_train_one_epoch_with_aux_loss_updates_aux_head():
 
 
 def test_main_smoke_test_produces_all_expected_artefacts(tmp_path: Path):
-    if not (REPO / "data/processed/train_scaled.csv").is_file():
+    if not (REPO / "data/processed/splits/train_scaled.csv").is_file():
         pytest.skip("preprocessing outputs not present; run run_pipeline.py first")
 
     output_dir = tmp_path / "run"

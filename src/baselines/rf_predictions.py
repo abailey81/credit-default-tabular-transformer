@@ -227,9 +227,9 @@ def _build_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     p.add_argument("--config", type=Path, default=Path("results/baseline/rf_config.json"))
-    p.add_argument("--train-csv", type=Path, default=Path("data/processed/train_engineered.csv"))
-    p.add_argument("--val-csv", type=Path, default=Path("data/processed/val_engineered.csv"))
-    p.add_argument("--test-csv", type=Path, default=Path("data/processed/test_engineered.csv"))
+    p.add_argument("--train-csv", type=Path, default=Path("data/processed/splits/train_engineered.csv"))
+    p.add_argument("--val-csv", type=Path, default=Path("data/processed/splits/val_engineered.csv"))
+    p.add_argument("--test-csv", type=Path, default=Path("data/processed/splits/test_engineered.csv"))
     p.add_argument("--output-dir", type=Path, default=Path("results/baseline/rf"))
     p.add_argument("--random-state", type=int, default=DEFAULT_RANDOM_STATE)
     return p

@@ -17,11 +17,11 @@ belongs in EDA, not here.
 
 Writes the following under ``output_dir`` (default ``data/processed/``):
 
-* ``train_raw.csv`` / ``val_raw.csv`` / ``test_raw.csv``       — pre-scaling
-* ``train_scaled.csv`` / ``val_scaled.csv`` / ``test_scaled.csv`` — post-scaling
-* ``train_engineered.csv`` + siblings                          — with 22 FE cols
-* ``feature_metadata.json``                                    — tokeniser input
-* ``validation_report.json``                                   — QA trace
+* ``splits/train_raw.csv`` / ``val_raw.csv`` / ``test_raw.csv``       — pre-scaling
+* ``splits/train_scaled.csv`` / ``val_scaled.csv`` / ``test_scaled.csv`` — post-scaling
+* ``splits/train_engineered.csv`` + siblings                          — with 22 FE cols
+* ``feature_metadata.json``                                           — tokeniser input
+* ``validation_report.json``                                          — QA trace
 """
 
 import os
@@ -552,11 +552,11 @@ def run_preprocessing_pipeline(
     Returns ``(train_scaled, val_scaled, test_scaled, metadata, validation_report)``
     and writes the full artefact set under ``output_dir``:
 
-    * ``{train,val,test}_raw.csv``        — post-clean, pre-scaling frames.
-    * ``{train,val,test}_scaled.csv``     — with fitted StandardScalers applied.
-    * ``{train,val,test}_engineered.csv`` — raw + the 22 FE columns (for RF).
-    * ``feature_metadata.json``           — tokeniser vocabularies + stats.
-    * ``validation_report.json``          — quality-check trace.
+    * ``splits/{train,val,test}_raw.csv``        — post-clean, pre-scaling frames.
+    * ``splits/{train,val,test}_scaled.csv``     — with fitted StandardScalers applied.
+    * ``splits/{train,val,test}_engineered.csv`` — raw + the 22 FE columns (for RF).
+    * ``feature_metadata.json``                  — tokeniser vocabularies + stats.
+    * ``validation_report.json``                 — quality-check trace.
 
     Splitting is done twice: once on the unengineered frame (for the raw /
     scaled CSVs the transformer reads) and once on the engineered frame
@@ -574,6 +574,8 @@ def run_preprocessing_pipeline(
         are still written, but identical to the raw frames).
     """
     os.makedirs(output_dir, exist_ok=True)
+    splits_dir = f"{output_dir}/splits"
+    os.makedirs(splits_dir, exist_ok=True)
 
     df = load_raw_data(data_path, mode=mode, allow_fallback=allow_fallback)
     df = normalise_schema(df)
@@ -599,15 +601,15 @@ def run_preprocessing_pipeline(
     val_scaled = apply_scalers(val_df, scalers)
     test_scaled = apply_scalers(test_df, scalers)
 
-    train_df.to_csv(f"{output_dir}/train_raw.csv", index=False)
-    val_df.to_csv(f"{output_dir}/val_raw.csv", index=False)
-    test_df.to_csv(f"{output_dir}/test_raw.csv", index=False)
-    train_scaled.to_csv(f"{output_dir}/train_scaled.csv", index=False)
-    val_scaled.to_csv(f"{output_dir}/val_scaled.csv", index=False)
-    test_scaled.to_csv(f"{output_dir}/test_scaled.csv", index=False)
-    train_eng.to_csv(f"{output_dir}/train_engineered.csv", index=False)
-    val_eng.to_csv(f"{output_dir}/val_engineered.csv", index=False)
-    test_eng.to_csv(f"{output_dir}/test_engineered.csv", index=False)
+    train_df.to_csv(f"{splits_dir}/train_raw.csv", index=False)
+    val_df.to_csv(f"{splits_dir}/val_raw.csv", index=False)
+    test_df.to_csv(f"{splits_dir}/test_raw.csv", index=False)
+    train_scaled.to_csv(f"{splits_dir}/train_scaled.csv", index=False)
+    val_scaled.to_csv(f"{splits_dir}/val_scaled.csv", index=False)
+    test_scaled.to_csv(f"{splits_dir}/test_scaled.csv", index=False)
+    train_eng.to_csv(f"{splits_dir}/train_engineered.csv", index=False)
+    val_eng.to_csv(f"{splits_dir}/val_engineered.csv", index=False)
+    test_eng.to_csv(f"{splits_dir}/test_engineered.csv", index=False)
 
     with open(f"{output_dir}/feature_metadata.json", "w") as f:
         json.dump(metadata, f, indent=2)

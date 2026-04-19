@@ -472,7 +472,7 @@ def _build_parser() -> argparse.ArgumentParser:
         ],
     )
     p.add_argument("--rf-dir", type=Path, default=Path("results/baseline/rf"))
-    p.add_argument("--test-raw", type=Path, default=Path("data/processed/test_raw.csv"))
+    p.add_argument("--test-raw", type=Path, default=Path("data/processed/splits/test_raw.csv"))
     p.add_argument("--attributes", nargs="+", default=["SEX", "EDUCATION", "MARRIAGE"])
     p.add_argument("--threshold", type=float, default=0.5)
     p.add_argument(

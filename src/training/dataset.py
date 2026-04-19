@@ -395,8 +395,8 @@ if __name__ == "__main__":
 
     root = Path(__file__).resolve().parent.parent.parent
     meta_path = root / "data/processed/feature_metadata.json"
-    train_csv = root / "data/processed/train_scaled.csv"
-    val_csv = root / "data/processed/val_scaled.csv"
+    train_csv = root / "data/processed/splits/train_scaled.csv"
+    val_csv = root / "data/processed/splits/val_scaled.csv"
     if not (meta_path.is_file() and train_csv.is_file() and val_csv.is_file()):
         print(
             "[SKIP] dataset.py smoke test requires preprocessing output.\n"

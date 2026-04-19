@@ -8,7 +8,7 @@ from typing import Any, Dict, List
 import numpy as np
 import pytest
 
-REPO = Path(__file__).resolve().parent.parent
+REPO = Path(__file__).resolve().parent.parent.parent
 
 from src.evaluation import visualise as vis  # noqa: E402
 
