@@ -46,7 +46,7 @@ import subprocess
 import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Optional
 
 import numpy as np
 import torch
@@ -237,9 +237,9 @@ class CheckpointMetadata:
     seed: Optional[int]
     step: Optional[int]
     epoch: Optional[int]
-    extra: Dict[str, Any] = field(default_factory=dict)
+    extra: dict[str, Any] = field(default_factory=dict)
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return asdict(self)
 
 
@@ -247,7 +247,7 @@ def build_checkpoint_metadata(
     seed: Optional[int] = None,
     step: Optional[int] = None,
     epoch: Optional[int] = None,
-    extra: Optional[Dict[str, Any]] = None,
+    extra: Optional[dict[str, Any]] = None,
 ) -> CheckpointMetadata:
     """Capture the current runtime into a :class:`CheckpointMetadata`.
 
@@ -317,7 +317,7 @@ def save_checkpoint(
     if metadata is None:
         metadata = build_checkpoint_metadata()
 
-    payload: Dict[str, Any] = {
+    payload: dict[str, Any] = {
         "model_state": model.state_dict(),
         "metadata": metadata.to_dict(),
     }
@@ -355,7 +355,7 @@ def load_checkpoint(
     strict: bool = True,
     map_location: Optional[torch.device | str] = None,
     trust_source: bool = False,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Load a checkpoint produced by :func:`save_checkpoint`.
 
     Security model (SECURITY_AUDIT C-1)
@@ -519,7 +519,7 @@ class EarlyStopping:
 
         self.best_score: Optional[float] = None
         self.best_epoch: Optional[int] = None
-        self.best_state: Optional[Dict[str, Any]] = None
+        self.best_state: Optional[dict[str, Any]] = None
         self.counter = 0
         self.epoch = 0
         self.stopped = False
@@ -534,7 +534,7 @@ class EarlyStopping:
     def step(
         self,
         score: float,
-        state: Optional[Dict[str, Any]] = None,
+        state: Optional[dict[str, Any]] = None,
     ) -> bool:
         """Record a new score; return True when training should stop.
 
@@ -627,7 +627,7 @@ class Timer:
         self.label = label
         self.elapsed: float = 0.0
 
-    def __enter__(self) -> "Timer":
+    def __enter__(self) -> Timer:
         self._start = time.perf_counter()
         return self
 

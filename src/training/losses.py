@@ -26,7 +26,7 @@ gradient flow (bottom-of-file smoke test)."""
 from __future__ import annotations
 
 import logging
-from typing import Literal, Optional, Tuple
+from typing import Literal, Optional
 
 import torch
 import torch.nn as nn
@@ -64,7 +64,7 @@ def compute_pos_weight(y: torch.Tensor) -> torch.Tensor:
     return neg / pos
 
 
-def balanced_alpha(y: torch.Tensor) -> Tuple[float, float]:
+def balanced_alpha(y: torch.Tensor) -> tuple[float, float]:
     """Compute class-balancing ``(α_pos, α_neg)`` priors for focal loss.
 
     Uses the standard inverse-frequency rule::
@@ -208,7 +208,7 @@ class FocalLoss(nn.Module):
     def __init__(
         self,
         gamma: float = 2.0,
-        alpha: float | Tuple[float, float] | Literal["balanced"] | None = None,
+        alpha: float | tuple[float, float] | Literal["balanced"] | None = None,
         reduction: Reduction = "mean",
     ):
         super().__init__()
@@ -219,12 +219,12 @@ class FocalLoss(nn.Module):
         self.reduction: Reduction = reduction
         # Filled on first forward when alpha == "balanced" so we see the real
         # batch distribution before committing. Stays None otherwise.
-        self._balanced_fitted: Optional[Tuple[float, float]] = None
+        self._balanced_fitted: Optional[tuple[float, float]] = None
 
     def _resolve_alpha(
         self,
         targets: torch.Tensor,
-    ) -> Optional[Tuple[torch.Tensor, torch.Tensor]]:
+    ) -> Optional[tuple[torch.Tensor, torch.Tensor]]:
         """Normalise ``self.alpha`` into two device-placed scalar tensors.
 
         Returns ``None`` when alpha is disabled so the caller can skip the

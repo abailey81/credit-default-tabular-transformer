@@ -28,9 +28,10 @@ from __future__ import annotations
 import argparse
 import logging
 import math
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Optional
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -87,9 +88,9 @@ class TestResult:
     ci_low: Optional[float] = None
     ci_high: Optional[float] = None
     n: Optional[int] = None
-    extra: Optional[Dict[str, Any]] = None
+    extra: Optional[dict[str, Any]] = None
 
-    def as_row(self) -> Dict[str, Any]:
+    def as_row(self) -> dict[str, Any]:
         """Flatten for DataFrame consumption; namespaces the extras."""
         row = {
             "test": self.test,
@@ -210,7 +211,7 @@ def mcnemar_test(
     )
 
 
-def _structural_components(scores: np.ndarray, labels: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+def _structural_components(scores: np.ndarray, labels: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     """V10, V01 structural components via mid-ranks (Sun-Xu 2014).
 
     These are the per-row contributions to the Mann-Whitney-U form of
@@ -445,7 +446,7 @@ def paired_bootstrap(
     )
 
 
-def bh_fdr(p_values: Sequence[float], q: float = 0.05) -> Dict[str, np.ndarray]:
+def bh_fdr(p_values: Sequence[float], q: float = 0.05) -> dict[str, np.ndarray]:
     """Benjamini-Hochberg step-up FDR correction.
 
     In words: rank the p-values ascending, multiply the k-th smallest by
@@ -514,7 +515,9 @@ def min_n_for_auc_difference(
     def _var(auc: float) -> float:
         Q1 = auc / (2 - auc)
         Q2 = (2 * auc**2) / (1 + auc)
-        return auc * (1 - auc) + (prevalence - 1) * (Q1 - auc**2) + (-prevalence) * (Q2 - auc**2)
+        return (
+            auc * (1 - auc) + (prevalence - 1) * (Q1 - auc**2) + (-prevalence) * (Q2 - auc**2)
+        )
 
     var = 0.5 * (_var(auc_a) + _var(auc_b))  # conservative average of the two variances
     delta = abs(auc_a - auc_b)
@@ -525,7 +528,7 @@ def min_n_for_auc_difference(
     return int(math.ceil(n))
 
 
-def _load_run(run_dir: Path) -> Optional[Dict[str, np.ndarray]]:
+def _load_run(run_dir: Path) -> Optional[dict[str, np.ndarray]]:
     """Load test preds for one run. ``None`` if the npz is missing."""
     run_dir = Path(run_dir)
     npz = run_dir / "test_predictions.npz"
@@ -543,7 +546,7 @@ def _load_run(run_dir: Path) -> Optional[Dict[str, np.ndarray]]:
 #: Metric dispatch table for the paired bootstrap. Every entry takes
 #: ``(y, p)`` and returns a float -- the bootstrap loop doesn't need
 #: to know what the metric actually is, only that it's row-stable.
-METRIC_FNS: Dict[str, Callable[[np.ndarray, np.ndarray], float]] = {
+METRIC_FNS: dict[str, Callable[[np.ndarray, np.ndarray], float]] = {
     "auc_roc": lambda y, p: float(roc_auc_score(y, p)),
     "auc_pr": lambda y, p: float(average_precision_score(y, p)),
     "brier": lambda y, p: float(brier_score_loss(y, p)),
@@ -554,7 +557,7 @@ METRIC_FNS: Dict[str, Callable[[np.ndarray, np.ndarray], float]] = {
 
 
 def run_all_pairs(
-    runs: Sequence[Dict[str, np.ndarray]],
+    runs: Sequence[dict[str, np.ndarray]],
     *,
     n_resamples: int = 2000,
     seed: int = 0,
@@ -567,7 +570,7 @@ def run_all_pairs(
     fewer tests. Correcting within family keeps each family's false-
     discovery rate at the nominal level.
     """
-    results: List[TestResult] = []
+    results: list[TestResult] = []
     for i, ra in enumerate(runs):
         for rb in runs[i + 1 :]:
             y = ra["y_true"]
@@ -701,7 +704,7 @@ def _build_parser() -> argparse.ArgumentParser:
     return p
 
 
-def main(argv: Optional[List[str]] = None) -> int:
+def main(argv: Optional[list[str]] = None) -> int:
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s %(levelname)-8s %(name)s  %(message)s",
@@ -731,7 +734,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     # AUC gap at 80 % power? Anchored at AUC ~ 0.78 (where this project
     # sits) and sweeping deltas we'd actually care about.
     prevalence = float(np.mean(loaded[0]["y_true"]))
-    power_rows: List[Dict[str, Any]] = []
+    power_rows: list[dict[str, Any]] = []
     for delta in (0.005, 0.01, 0.02):
         auc0 = 0.78
         auc1 = auc0 + delta

@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from argparse import Namespace
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any
 
 import pytest
 import torch
@@ -25,7 +25,7 @@ def _default_args_namespace(**overrides: Any) -> Namespace:
     return args
 
 
-def _cat_vocab_sizes() -> Dict[str, int]:
+def _cat_vocab_sizes() -> dict[str, int]:
     from src.tokenization.embedding import CAT_VOCAB_SIZES
 
     return dict(CAT_VOCAB_SIZES)

@@ -47,7 +47,7 @@ import math
 import subprocess
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Optional
 
 import numpy as np
 import pandas as pd
@@ -295,7 +295,7 @@ def _load_splits(
     seed: int,
     data_frac: float,
     smoke_test: bool,
-) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, Dict[str, Any]]:
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, dict[str, Any]]:
     meta_path = _REPO / "data/processed/feature_metadata.json"
     paths = {
         "train": _REPO / "data/processed/splits/train_scaled.csv",
@@ -342,8 +342,8 @@ def _load_splits(
     return train_df, val_df, test_df, meta
 
 
-def _to_device(batch: Dict[str, Any], device: torch.device) -> Dict[str, Any]:
-    out: Dict[str, Any] = {}
+def _to_device(batch: dict[str, Any], device: torch.device) -> dict[str, Any]:
+    out: dict[str, Any] = {}
     for k, v in batch.items():
         if isinstance(v, dict):
             out[k] = {kk: vv.to(device, non_blocking=True) for kk, vv in v.items()}
@@ -482,7 +482,7 @@ def compute_classification_metrics(
     y_prob: np.ndarray,
     threshold: float = 0.5,
     prefix: str = "",
-) -> Dict[str, float]:
+) -> dict[str, float]:
     """Build the eight-metric classification report used across the project.
 
     Parameters
@@ -528,7 +528,7 @@ def evaluate_on_loader(
     device: torch.device,
     *,
     collect_attn: bool = False,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Run one pass of a model over a loader and return predictions + metrics.
 
     Parameters
@@ -560,9 +560,9 @@ def evaluate_on_loader(
     mode and silently change the loss dynamics.
     """
     model.eval()
-    ys: List[np.ndarray] = []
-    ps: List[np.ndarray] = []
-    attns_per_layer: Optional[List[List[np.ndarray]]] = None
+    ys: list[np.ndarray] = []
+    ps: list[np.ndarray] = []
+    attns_per_layer: Optional[list[list[np.ndarray]]] = None
 
     for batch in loader:
         batch = _to_device(batch, device)
@@ -578,7 +578,7 @@ def evaluate_on_loader(
 
     y_true = np.concatenate(ys)
     y_prob = np.concatenate(ps)
-    result: Dict[str, Any] = {
+    result: dict[str, Any] = {
         "y_true": y_true,
         "y_prob": y_prob,
         "metrics": compute_classification_metrics(y_true, y_prob),
@@ -599,7 +599,7 @@ def train_one_epoch(
     grad_clip: float = 1.0,
     aux_loss_fn: Optional[nn.Module] = None,
     aux_lambda: float = 0.0,
-) -> Dict[str, float]:
+) -> dict[str, float]:
     """Run one SGD epoch and return per-epoch diagnostics.
 
     Composite loss
@@ -643,9 +643,9 @@ def train_one_epoch(
     # Put modules with train-only behaviour (dropout, BN if any) in train mode;
     # MUST be mirrored by model.eval() in evaluate_on_loader.
     model.train()
-    primary_losses: List[float] = []
-    aux_losses: List[float] = []
-    grad_norms: List[float] = []
+    primary_losses: list[float] = []
+    aux_losses: list[float] = []
+    grad_norms: list[float] = []
 
     for batch in loader:
         batch = _to_device(batch, device)
@@ -768,7 +768,7 @@ def build_optimizer(
     )
 
 
-def main(argv: Optional[List[str]] = None) -> int:
+def main(argv: Optional[list[str]] = None) -> int:
     """CLI entry point: parse args → build data/model/opt → train → persist.
 
     Exits with code 0 on success. Side effects: writes to ``output_dir``
@@ -910,7 +910,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     logger.info("Config snapshot -> %s", output_dir / "config.json")
 
     # train
-    log_rows: List[Dict[str, Any]] = []
+    log_rows: list[dict[str, Any]] = []
     start = time.perf_counter()
     logger.info(
         "Starting training: %d epochs (<= %d steps, warmup %d steps).",
@@ -1024,8 +1024,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         for t in (0.10, 0.15, 0.20, 0.25, 0.30, 0.40, 0.50, 0.60)
     }
 
-    def _write_split(split: str, ev: Dict[str, Any], *, include_test_extras: bool) -> None:
-        payload: Dict[str, Any] = {
+    def _write_split(split: str, ev: dict[str, Any], *, include_test_extras: bool) -> None:
+        payload: dict[str, Any] = {
             "split": split,
             "threshold": 0.5,
             "metrics": ev["metrics"],

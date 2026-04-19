@@ -45,7 +45,7 @@ import math
 import subprocess
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Optional
 
 import numpy as np
 import pandas as pd
@@ -204,7 +204,7 @@ def _resolve_output_dir(args: argparse.Namespace) -> Path:
 def _load_splits(
     seed: int,
     smoke_test: bool,
-) -> Tuple[pd.DataFrame, pd.DataFrame, Dict[str, Any]]:
+) -> tuple[pd.DataFrame, pd.DataFrame, dict[str, Any]]:
     """train + val + meta. test is reserved for supervised eval."""
     meta_path = _REPO / "data/processed/feature_metadata.json"
     paths = {
@@ -229,8 +229,8 @@ def _load_splits(
     return train_df, val_df, meta
 
 
-def _to_device(batch: Dict[str, Any], device: torch.device) -> Dict[str, Any]:
-    out: Dict[str, Any] = {}
+def _to_device(batch: dict[str, Any], device: torch.device) -> dict[str, Any]:
+    out: dict[str, Any] = {}
     for k, v in batch.items():
         if isinstance(v, dict):
             out[k] = {kk: vv.to(device, non_blocking=True) for kk, vv in v.items()}
@@ -272,7 +272,7 @@ def build_cosine_warmup_schedule(
 
 def build_mtlm_model(
     args: argparse.Namespace,
-    cat_vocab_sizes: Dict[str, int],
+    cat_vocab_sizes: dict[str, int],
 ) -> MTLMModel:
     """Assemble the MTLM model for pretraining.
 
@@ -346,11 +346,11 @@ def train_one_epoch(
     device: torch.device,
     *,
     grad_clip: float = 1.0,
-    num_feature_variance: Optional[Dict[str, float]] = None,
+    num_feature_variance: Optional[dict[str, float]] = None,
     w_cat: float = 1.0,
     w_pay: float = 1.0,
     w_num: float = 1.0,
-) -> Dict[str, float]:
+) -> dict[str, float]:
     """Run one epoch of MTLM pretraining.
 
     The loss is a weighted sum of three reconstruction terms:
@@ -373,12 +373,12 @@ def train_one_epoch(
         count per row — a sanity check that the collator is actually masking).
     """
     model.train()
-    totals: List[float] = []
-    cats: List[float] = []
-    pays: List[float] = []
-    nums: List[float] = []
-    grad_norms: List[float] = []
-    masked_counts: List[int] = []
+    totals: list[float] = []
+    cats: list[float] = []
+    pays: list[float] = []
+    nums: list[float] = []
+    grad_norms: list[float] = []
+    masked_counts: list[int] = []
 
     for batch in loader:
         batch = _to_device(batch, device)
@@ -422,11 +422,11 @@ def evaluate_on_loader(
     loader: DataLoader,
     device: torch.device,
     *,
-    num_feature_variance: Optional[Dict[str, float]] = None,
+    num_feature_variance: Optional[dict[str, float]] = None,
     w_cat: float = 1.0,
     w_pay: float = 1.0,
     w_num: float = 1.0,
-) -> Dict[str, float]:
+) -> dict[str, float]:
     """Mean held-out MTLM reconstruction loss, per branch and total.
 
     The val loader's :class:`MTLMCollator` is seeded independently from the
@@ -436,10 +436,10 @@ def evaluate_on_loader(
     loss would measure memorisation of specific mask positions.
     """
     model.eval()
-    totals: List[float] = []
-    cats: List[float] = []
-    pays: List[float] = []
-    nums: List[float] = []
+    totals: list[float] = []
+    cats: list[float] = []
+    pays: list[float] = []
+    nums: list[float] = []
 
     for batch in loader:
         batch = _to_device(batch, device)
@@ -466,7 +466,7 @@ def evaluate_on_loader(
     }
 
 
-def main(argv: Optional[List[str]] = None) -> int:
+def main(argv: Optional[list[str]] = None) -> int:
     """CLI entry point for MTLM pretraining.
 
     Writes two artefacts to ``output_dir``: the full ``best.pt`` checkpoint
@@ -600,7 +600,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     logger.info("Config snapshot -> %s", output_dir / "config.json")
 
     # train
-    log_rows: List[Dict[str, Any]] = []
+    log_rows: list[dict[str, Any]] = []
     start = time.perf_counter()
     logger.info(
         "Starting MTLM pretraining: %d epochs (<= %d steps, warmup %d steps, mask_prob=%.2f).",

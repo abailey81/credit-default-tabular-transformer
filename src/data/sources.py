@@ -35,9 +35,10 @@ from __future__ import annotations
 import logging
 import time
 from abc import ABC, abstractmethod
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Literal, Optional, Sequence, Tuple, Union
+from typing import Literal, Optional, Union
 
 import pandas as pd
 
@@ -88,7 +89,7 @@ UCI_COLUMN_MAP: dict[str, str] = {
 # shipped both underscore and space-separated variants across years, and
 # both .xls and .xlsx exist. Order matters: the most common naming first
 # keeps the typical path short.
-DEFAULT_LOCAL_CANDIDATES: Tuple[str, ...] = (
+DEFAULT_LOCAL_CANDIDATES: tuple[str, ...] = (
     "data/raw/default_of_credit_card_clients.xls",
     "data/raw/default_of_credit_card_clients.xlsx",
     "data/raw/default of credit card clients.xls",
@@ -113,8 +114,8 @@ class DataIngestionError(RuntimeError):
     for each miss so post-mortems do not need to re-run with DEBUG logging.
     """
 
-    def __init__(self, attempts: Sequence[Tuple[str, str]]):
-        self.attempts: Tuple[Tuple[str, str], ...] = tuple(attempts)
+    def __init__(self, attempts: Sequence[tuple[str, str]]):
+        self.attempts: tuple[tuple[str, str], ...] = tuple(attempts)
         lines = ["All configured data sources failed:"]
         for name, err in self.attempts:
             lines.append(f"  - {name}: {err}")
@@ -136,7 +137,7 @@ class DataSourceResult:
     source_type: Literal["api", "local"]
     origin: str
     duration_s: float
-    failed_attempts: Tuple[Tuple[str, str], ...] = field(default_factory=tuple)
+    failed_attempts: tuple[tuple[str, str], ...] = field(default_factory=tuple)
 
     def summary(self) -> str:
         """Single-line log summary: shape, source, origin, timing, misses."""
@@ -229,7 +230,8 @@ class UCIRepoSource(DataSource):
         #       handshake or CPython's GIL under an unresponsive peer.
         # Without (b), a blocked worker can outlive the whole retry budget.
         import socket
-        from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeout
+        from concurrent.futures import ThreadPoolExecutor
+        from concurrent.futures import TimeoutError as FutureTimeout
 
         last_error: Optional[BaseException] = None
         start = time.perf_counter()
@@ -333,7 +335,7 @@ class LocalExcelSource(DataSource):
             if key not in seen:
                 seen.add(key)
                 unique.append(Path(c))
-        self.candidates: Tuple[Path, ...] = tuple(unique)
+        self.candidates: tuple[Path, ...] = tuple(unique)
 
     @property
     def name(self) -> str:
@@ -419,7 +421,7 @@ class ChainedDataSource(DataSource):
     def __init__(self, sources: Sequence[DataSource]) -> None:
         if not sources:
             raise ValueError("ChainedDataSource requires at least one child source")
-        self.sources: Tuple[DataSource, ...] = tuple(sources)
+        self.sources: tuple[DataSource, ...] = tuple(sources)
 
     @property
     def name(self) -> str:
@@ -438,7 +440,7 @@ class ChainedDataSource(DataSource):
     )
 
     def load(self) -> DataSourceResult:
-        failures: list[Tuple[str, str]] = []
+        failures: list[tuple[str, str]] = []
         for source in self.sources:
             try:
                 result = source.load()

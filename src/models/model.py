@@ -42,8 +42,9 @@ from __future__ import annotations
 
 import logging
 import os
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Any, Dict, List, Literal, Optional, Sequence
+from typing import Any, Literal, Optional
 
 import torch
 import torch.nn as nn
@@ -116,7 +117,7 @@ class TabularTransformer(nn.Module):
         temporal_decay_mode: Literal["off", "scalar", "per_head"] = "off",
         feature_group_bias_mode: Literal["off", "scalar", "per_head"] = "off",
         aux_pay0: bool = False,
-        cat_vocab_sizes: Optional[Dict[str, int]] = None,
+        cat_vocab_sizes: Optional[dict[str, int]] = None,
     ):
         super().__init__()
         if pool not in ("cls", "mean", "max"):
@@ -242,7 +243,7 @@ class TabularTransformer(nn.Module):
             return feature_hidden.mean(dim=1)
         return feature_hidden.max(dim=1).values
 
-    def _apply_aux_force_mask(self, batch: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
+    def _apply_aux_force_mask(self, batch: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
         """Force PAY_0 into ``[MASK]`` on every row.
 
         The auxiliary PAY_0 head must predict a genuinely unseen label, or
@@ -263,10 +264,10 @@ class TabularTransformer(nn.Module):
 
     def forward(
         self,
-        batch: Dict[str, torch.Tensor],
+        batch: dict[str, torch.Tensor],
         *,
         return_attn: bool = False,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Run embedding -> encoder -> pool -> head.
 
         Parameters
@@ -300,7 +301,7 @@ class TabularTransformer(nn.Module):
         # expects (B,).
         logit = self.classifier(self.head_norm(pooled)).squeeze(-1)
 
-        out: Dict[str, Any] = {"logit": logit}
+        out: dict[str, Any] = {"logit": logit}
 
         if self.aux_pay0:
             assert self.aux_pay0_head is not None
@@ -321,14 +322,14 @@ class TabularTransformer(nn.Module):
     def parameter_count_by_module(
         self,
         trainable_only: bool = True,
-    ) -> Dict[str, int]:
+    ) -> dict[str, int]:
         """Parameter count per top-level submodule.
 
         Stray leaf parameters (directly on the ``TabularTransformer``, not
         inside a submodule) are aggregated under the ``_leaf`` key. Used
         by ``summary()`` for the percentage breakdown.
         """
-        counts: Dict[str, int] = {}
+        counts: dict[str, int] = {}
         # Track param ids we've seen inside submodules so we can detect
         # leaf parameters (belonging to self, not to any child module).
         seen_param_ids: set[int] = set()
@@ -352,21 +353,21 @@ class TabularTransformer(nn.Module):
             counts["_leaf"] = leaf
         return counts
 
-    def get_head_params(self) -> List[torch.nn.Parameter]:
+    def get_head_params(self) -> list[torch.nn.Parameter]:
         """Parameters belonging to the classification + aux heads.
 
         ``train.build_optimizer`` puts these into the "head" parameter
         group so during fine-tuning they can stay at peak learning rate
         while the (pretrained) encoder uses a lower LR / warmup.
         """
-        params: List[torch.nn.Parameter] = []
+        params: list[torch.nn.Parameter] = []
         for module in (self.head_norm, self.classifier, self.aux_pay0_head):
             if module is None:
                 continue
             params.extend(module.parameters())
         return params
 
-    def get_encoder_params(self) -> List[torch.nn.Parameter]:
+    def get_encoder_params(self) -> list[torch.nn.Parameter]:
         """Everything not returned by ``get_head_params()``.
 
         The two lists partition ``self.parameters()`` exactly, so the
@@ -384,7 +385,7 @@ class TabularTransformer(nn.Module):
         """
         n_total = self.count_parameters()
         breakdown = self.parameter_count_by_module()
-        lines: List[str] = []
+        lines: list[str] = []
         lines.append("TabularTransformer - architecture summary")
         lines.append("-" * 56)
         lines.append(f"  d_model           : {self.d_model}")
@@ -429,7 +430,7 @@ class TabularTransformer(nn.Module):
         device: Optional[torch.device] = None,
         *,
         return_attn: bool = False,
-    ) -> Dict[str, torch.Tensor]:
+    ) -> dict[str, torch.Tensor]:
         """Run inference over a dataloader and concat the outputs.
 
         Parameters
@@ -457,17 +458,17 @@ class TabularTransformer(nn.Module):
         if device is None:
             device = next(self.parameters()).device
 
-        logits_chunks: List[torch.Tensor] = []
-        label_chunks: List[torch.Tensor] = []
+        logits_chunks: list[torch.Tensor] = []
+        label_chunks: list[torch.Tensor] = []
         # attn_chunks stays None until we see the first batch's return
         # structure — that's when we find out how many layers there are.
-        attn_chunks: Optional[List[List[torch.Tensor]]] = None
+        attn_chunks: Optional[list[list[torch.Tensor]]] = None
 
         for batch in loader:
             # Move every tensor leaf to `device`. Dicts of tensors (e.g.
             # cat_indices) are recursed one level; deeper nesting is not
             # produced by our dataset collate_fn, so we don't handle it.
-            moved: Dict[str, Any] = {}
+            moved: dict[str, Any] = {}
             for k, v in batch.items():
                 if isinstance(v, dict):
                     moved[k] = {kk: vv.to(device, non_blocking=True) for kk, vv in v.items()}
@@ -485,7 +486,7 @@ class TabularTransformer(nn.Module):
                 for i, w in enumerate(out["attn_weights"]):
                     attn_chunks[i].append(w.detach().cpu())
 
-        result: Dict[str, torch.Tensor] = {
+        result: dict[str, torch.Tensor] = {
             "logit": torch.cat(logits_chunks, dim=0),
         }
         if label_chunks:
@@ -559,7 +560,7 @@ class TabularTransformer(nn.Module):
         strict: bool = False,
         trust_source: bool = False,
         map_location: Optional[torch.device | str] = None,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Load encoder weights from one of two on-disk shapes.
 
         1. Full bundle: the three-file layout written by

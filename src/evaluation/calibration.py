@@ -34,9 +34,10 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Optional
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -119,7 +120,7 @@ class IdentityCalibrator:
 
     name = "identity"
 
-    def fit(self, y: np.ndarray, p: np.ndarray) -> "IdentityCalibrator":
+    def fit(self, y: np.ndarray, p: np.ndarray) -> IdentityCalibrator:
         return self
 
     def transform(self, p: np.ndarray) -> np.ndarray:
@@ -165,7 +166,7 @@ class TemperatureScaling:
 
     name = "temperature"
 
-    def __init__(self, bounds: Tuple[float, float] = (0.05, 10.0)):
+    def __init__(self, bounds: tuple[float, float] = (0.05, 10.0)):
         self.bounds = bounds
         self.temperature_: Optional[float] = None
 
@@ -186,7 +187,7 @@ class TemperatureScaling:
         log_1_sig = -np.logaddexp(0.0, z)
         return -float(np.sum(y * log_sig + (1.0 - y) * log_1_sig))
 
-    def fit(self, y: np.ndarray, p: np.ndarray) -> "TemperatureScaling":
+    def fit(self, y: np.ndarray, p: np.ndarray) -> TemperatureScaling:
         """Fit ``T`` by 1-D bounded Brent minimisation of NLL.
 
         Parameters
@@ -266,7 +267,7 @@ class PlattScaling:
         log_1_sig = -np.logaddexp(0.0, z)
         return -float(np.sum(y * log_sig + (1.0 - y) * log_1_sig))
 
-    def fit(self, y: np.ndarray, p: np.ndarray) -> "PlattScaling":
+    def fit(self, y: np.ndarray, p: np.ndarray) -> PlattScaling:
         y = y.astype(np.float64)
         x = _probs_to_logits(p)
         # NLL is convex in (a, b); L-BFGS-B converges in ~10 iters. Niculescu-Mizil
@@ -316,7 +317,7 @@ class IsotonicCalibrator:
         )
         self._fitted = False
 
-    def fit(self, y: np.ndarray, p: np.ndarray) -> "IsotonicCalibrator":
+    def fit(self, y: np.ndarray, p: np.ndarray) -> IsotonicCalibrator:
         self._iso.fit(_clip_probs(p), y.astype(np.float64))
         self._fitted = True
         return self
@@ -333,7 +334,7 @@ class IsotonicCalibrator:
 #: Registry of all calibrators. String key is the short name used in the
 #: CLI / CSV, value is the constructor. Drivers iterate this to stay
 #: order-preserving without hard-coding the class list.
-CALIBRATORS: Dict[str, type] = {
+CALIBRATORS: dict[str, type] = {
     "identity": IdentityCalibrator,
     "temperature": TemperatureScaling,
     "platt": PlattScaling,
@@ -433,7 +434,7 @@ def maximum_calibration_error(
     y = y_true.astype(np.float64)
     p = p.astype(np.float64)
     bins = _bin_indices(p, n_bins, strategy)
-    gaps: List[float] = []
+    gaps: list[float] = []
     for b in np.unique(bins):
         mask = bins == b
         if mask.sum() == 0:
@@ -531,7 +532,7 @@ def calibration_metric_bundle(
     y_true: np.ndarray,
     p: np.ndarray,
     n_bins: int = 10,
-) -> Dict[str, float]:
+) -> dict[str, float]:
     """Every calibration number we report for one (run, calibrator) pair.
 
     AUC is included so the caller can verify monotonicity-preserving
@@ -571,8 +572,8 @@ class CalibrationResult:
 
     run_name: str
     calibrator: str
-    metrics: Dict[str, float]
-    params: Dict[str, Any] = field(default_factory=dict)
+    metrics: dict[str, float]
+    params: dict[str, Any] = field(default_factory=dict)
 
 
 def calibrate_and_score(
@@ -584,7 +585,7 @@ def calibrate_and_score(
     calibrator_names: Sequence[str] = ("identity", "temperature", "platt", "isotonic"),
     n_bins: int = 10,
     run_name: str = "run",
-) -> List[CalibrationResult]:
+) -> list[CalibrationResult]:
     """Fit each calibrator on (y_val, p_val); score on (y_test, p_test).
 
     Parameters
@@ -606,7 +607,7 @@ def calibrate_and_score(
     list of CalibrationResult
         One entry per calibrator, in the input order.
     """
-    results: List[CalibrationResult] = []
+    results: list[CalibrationResult] = []
     for name in calibrator_names:
         if name not in CALIBRATORS:
             raise ValueError(f"Unknown calibrator: {name}")
@@ -614,7 +615,7 @@ def calibrate_and_score(
         cal.fit(y_val, p_val)
         p_test_cal = cal.transform(p_test)
         metrics = calibration_metric_bundle(y_test, p_test_cal, n_bins=n_bins)
-        params: Dict[str, Any] = {}
+        params: dict[str, Any] = {}
         # Expose fitted parameters so the result is reproducible without
         # re-running the fit (important for the report's calibration appendix).
         if isinstance(cal, TemperatureScaling):
@@ -635,9 +636,9 @@ def calibrate_and_score(
 
 def results_to_dataframe(results: Sequence[CalibrationResult]) -> pd.DataFrame:
     """Flatten a list of :class:`CalibrationResult` into a tidy frame."""
-    rows: List[Dict[str, Any]] = []
+    rows: list[dict[str, Any]] = []
     for r in results:
-        row: Dict[str, Any] = {"run": r.run_name, "calibrator": r.calibrator}
+        row: dict[str, Any] = {"run": r.run_name, "calibrator": r.calibrator}
         row.update(r.metrics)
         # Namespace the fitted parameters with "param_" so they don't clash
         # with metric column names when different calibrators are joined.
@@ -651,7 +652,7 @@ def _reliability_points(
     y: np.ndarray,
     p: np.ndarray,
     n_bins: int = 10,
-) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Per-bin (mean confidence, observed frequency, count) for plotting.
 
     Unlike :func:`_bin_indices`, the last bin is right-*inclusive* so a
@@ -659,9 +660,9 @@ def _reliability_points(
     would always look empty.
     """
     edges = np.linspace(0.0, 1.0, n_bins + 1)
-    confs: List[float] = []
-    accs: List[float] = []
-    counts: List[int] = []
+    confs: list[float] = []
+    accs: list[float] = []
+    counts: list[int] = []
     for i in range(n_bins):
         lo, hi = edges[i], edges[i + 1]
         mask = (p >= lo) & (p < hi if i < n_bins - 1 else p <= hi)
@@ -674,7 +675,7 @@ def _reliability_points(
 
 
 def plot_reliability_panel(
-    panels: List[Tuple[str, np.ndarray, np.ndarray]],
+    panels: list[tuple[str, np.ndarray, np.ndarray]],
     out_path: Path,
     n_bins: int = 10,
 ) -> None:
@@ -725,7 +726,7 @@ def plot_ece_bar(df: pd.DataFrame, out_path: Path) -> None:
     plt.close(fig)
 
 
-def _load_run_val_test(run_dir: Path) -> Optional[Dict[str, np.ndarray]]:
+def _load_run_val_test(run_dir: Path) -> Optional[dict[str, np.ndarray]]:
     """Read val+test prediction npz files from a single run directory.
 
     Returns ``None`` when either file is missing -- the caller logs a
@@ -776,7 +777,7 @@ def _build_parser() -> argparse.ArgumentParser:
     return p
 
 
-def main(argv: Optional[List[str]] = None) -> int:
+def main(argv: Optional[list[str]] = None) -> int:
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s %(levelname)-8s %(name)s  %(message)s",
@@ -784,8 +785,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     )
     args = _build_parser().parse_args(argv)
 
-    all_results: List[CalibrationResult] = []
-    reliability_panels: List[Tuple[str, np.ndarray, np.ndarray]] = []
+    all_results: list[CalibrationResult] = []
+    reliability_panels: list[tuple[str, np.ndarray, np.ndarray]] = []
 
     for run_dir in args.runs:
         payload = _load_run_val_test(run_dir)

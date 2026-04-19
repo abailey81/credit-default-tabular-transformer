@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import sys
 from pathlib import Path
-from typing import Dict
 
 import pandas as pd
 import pytest
@@ -25,7 +24,7 @@ def repo_root() -> Path:
 
 
 @pytest.fixture(scope="session")
-def metadata() -> Dict:
+def metadata() -> dict:
     path = DATA_DIR / "feature_metadata.json"
     if not path.is_file():
         pytest.skip(
@@ -49,7 +48,7 @@ def train_df_small(train_df) -> pd.DataFrame:
 
 
 @pytest.fixture(scope="session")
-def cat_vocab(metadata) -> Dict[str, Dict[int, int]]:
+def cat_vocab(metadata) -> dict[str, dict[int, int]]:
     from src.tokenization.tokenizer import build_categorical_vocab
 
     return build_categorical_vocab(metadata)

@@ -39,7 +39,7 @@ import argparse
 import json
 import logging
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -61,7 +61,7 @@ DEFAULT_RANDOM_STATE = 42
 TARGET = "DEFAULT"
 
 
-def _coerce_best_params(raw: Dict[str, Any]) -> Dict[str, Any]:
+def _coerce_best_params(raw: dict[str, Any]) -> dict[str, Any]:
     """Coerce string-serialised RF params back to their sklearn-native types.
 
     :func:`export_results` stringifies the best-params dict so the JSON stays
@@ -75,7 +75,7 @@ def _coerce_best_params(raw: Dict[str, Any]) -> Dict[str, Any]:
 
     Non-string values (already the right type) are preserved as-is.
     """
-    out: Dict[str, Any] = {}
+    out: dict[str, Any] = {}
     for k, v in raw.items():
         if not isinstance(v, str):
             out[k] = v
@@ -103,7 +103,7 @@ def fit_and_predict(
     *,
     random_state: int = DEFAULT_RANDOM_STATE,
     threshold: float = 0.5,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Refit the tuned RF on ``train+val`` and score the test split.
 
     Parameters
@@ -175,7 +175,7 @@ def fit_and_predict(
     }
 
 
-def save_predictions(result: Dict[str, Any], output_dir: Path) -> Dict[str, Path]:
+def save_predictions(result: dict[str, Any], output_dir: Path) -> dict[str, Path]:
     """Persist per-row predictions and a metrics sidecar.
 
     Layout mirrors :func:`src.training.train.main` exactly:
@@ -227,9 +227,13 @@ def _build_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     p.add_argument("--config", type=Path, default=Path("results/baseline/rf_config.json"))
-    p.add_argument("--train-csv", type=Path, default=Path("data/processed/splits/train_engineered.csv"))
+    p.add_argument(
+        "--train-csv", type=Path, default=Path("data/processed/splits/train_engineered.csv")
+    )
     p.add_argument("--val-csv", type=Path, default=Path("data/processed/splits/val_engineered.csv"))
-    p.add_argument("--test-csv", type=Path, default=Path("data/processed/splits/test_engineered.csv"))
+    p.add_argument(
+        "--test-csv", type=Path, default=Path("data/processed/splits/test_engineered.csv")
+    )
     p.add_argument("--output-dir", type=Path, default=Path("results/baseline/rf"))
     p.add_argument("--random-state", type=int, default=DEFAULT_RANDOM_STATE)
     return p

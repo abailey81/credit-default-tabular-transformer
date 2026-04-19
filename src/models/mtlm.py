@@ -49,7 +49,7 @@ from __future__ import annotations
 import logging
 import math
 from dataclasses import dataclass
-from typing import Dict, List, Optional
+from typing import Optional
 
 import torch
 import torch.nn as nn
@@ -106,8 +106,8 @@ class MTLMHead(nn.Module):
     def __init__(
         self,
         d_model: int,
-        cat_vocab_sizes: Dict[str, int],
-        numerical_features: Optional[List[str]] = None,
+        cat_vocab_sizes: dict[str, int],
+        numerical_features: Optional[list[str]] = None,
         dropout: float = 0.1,
     ):
         super().__init__()
@@ -150,7 +150,7 @@ class MTLMHead(nn.Module):
             nn.init.xavier_normal_(head.weight)
             nn.init.zeros_(head.bias)
 
-    def forward(self, hidden: torch.Tensor) -> Dict[str, Dict[str, torch.Tensor]]:
+    def forward(self, hidden: torch.Tensor) -> dict[str, dict[str, torch.Tensor]]:
         """Produce per-feature predictions from the encoder's hidden states.
 
         Parameters
@@ -174,15 +174,15 @@ class MTLMHead(nn.Module):
         h_pay = h[:, _SLICE_PAY, :]  # (B, 6, d)
         h_num = h[:, _SLICE_NUM, :]  # (B, 14, d)
 
-        cat_logits: Dict[str, torch.Tensor] = {}
+        cat_logits: dict[str, torch.Tensor] = {}
         for i, feat in enumerate(CATEGORICAL_FEATURES):
             cat_logits[feat] = self.cat_heads[feat](h_cat[:, i, :])
 
-        pay_logits: Dict[str, torch.Tensor] = {}
+        pay_logits: dict[str, torch.Tensor] = {}
         for i, feat in enumerate(PAY_STATUS_FEATURES):
             pay_logits[feat] = self.pay_heads[feat](h_pay[:, i, :])
 
-        num_preds: Dict[str, torch.Tensor] = {}
+        num_preds: dict[str, torch.Tensor] = {}
         for i, feat in enumerate(NUMERICAL_FEATURES):
             # squeeze(-1) so predictions are (B,) — matches target shape
             # and avoids an implicit broadcast in the MSE.
@@ -210,11 +210,11 @@ class MTLMLossComponents:
 
 
 def mtlm_loss(
-    predictions: Dict[str, Dict[str, torch.Tensor]],
-    batch: Dict[str, torch.Tensor],
+    predictions: dict[str, dict[str, torch.Tensor]],
+    batch: dict[str, torch.Tensor],
     mask_positions: torch.Tensor,
     *,
-    num_feature_variance: Optional[Dict[str, float]] = None,
+    num_feature_variance: Optional[dict[str, float]] = None,
     w_cat: float = 1.0,
     w_pay: float = 1.0,
     w_num: float = 1.0,
@@ -274,7 +274,7 @@ def mtlm_loss(
     total_mask = int(mask_positions.sum().item())
 
     # --- Categorical CE, entropy-normalised ---------------------------------
-    losses_cat: List[torch.Tensor] = []
+    losses_cat: list[torch.Tensor] = []
     for i, feat in enumerate(CATEGORICAL_FEATURES):
         slot_mask = mask_positions[:, CAT_START + i]
         # Skip features with no masked rows this batch — including them
@@ -292,7 +292,7 @@ def mtlm_loss(
         losses_cat.append(ce / norm)
 
     # --- PAY-status CE, entropy-normalised ----------------------------------
-    losses_pay: List[torch.Tensor] = []
+    losses_pay: list[torch.Tensor] = []
     for i, feat in enumerate(PAY_STATUS_FEATURES):
         slot_mask = mask_positions[:, PAY_START + i]
         if not slot_mask.any():
@@ -306,7 +306,7 @@ def mtlm_loss(
         losses_pay.append(ce / norm)
 
     # --- Numerical MSE, variance-normalised ---------------------------------
-    losses_num: List[torch.Tensor] = []
+    losses_num: list[torch.Tensor] = []
     for i, feat in enumerate(NUMERICAL_FEATURES):
         slot_mask = mask_positions[:, NUM_START + i]
         if not slot_mask.any():
@@ -376,8 +376,8 @@ class MTLMModel(nn.Module):
 
     def forward(
         self,
-        batch: Dict[str, torch.Tensor],
-    ) -> Dict[str, Dict[str, torch.Tensor]]:
+        batch: dict[str, torch.Tensor],
+    ) -> dict[str, dict[str, torch.Tensor]]:
         """Run embedding -> encoder -> head and return per-feature predictions."""
         tokens = self.embedding(batch)
         # Encoder returns (x, attn_weights); we drop attention here —
@@ -386,7 +386,7 @@ class MTLMModel(nn.Module):
         hidden, _attn = self.encoder(tokens)
         return self.mtlm_head(hidden)
 
-    def encoder_state_dict(self) -> Dict[str, torch.Tensor]:
+    def encoder_state_dict(self) -> dict[str, torch.Tensor]:
         """Return only the ``embedding.*`` + ``encoder.*`` keys.
 
         The MTLM head is task-specific and doesn't travel with the

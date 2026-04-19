@@ -32,7 +32,8 @@ there's no runtime dep on the MTLM pipeline otherwise."""
 from __future__ import annotations
 
 import logging
-from typing import Any, Callable, Dict, Iterator, List, Optional, Sequence
+from collections.abc import Callable, Iterator, Sequence
+from typing import Any, Optional
 
 import numpy as np
 import torch
@@ -54,7 +55,7 @@ __all__ = [
 ]
 
 
-def default_collate(batch: Sequence[Dict[str, Any]]) -> Dict[str, torch.Tensor]:
+def default_collate(batch: Sequence[dict[str, Any]]) -> dict[str, torch.Tensor]:
     """Stack per-item dicts into a batched dict.
 
     The key point is that we keep ``cat_indices`` as a *nested* dict
@@ -95,7 +96,7 @@ def default_collate(batch: Sequence[Dict[str, Any]]) -> Dict[str, torch.Tensor]:
     }
 
 
-class StratifiedBatchSampler(Sampler[List[int]]):
+class StratifiedBatchSampler(Sampler[list[int]]):
     """Yield batches with a fixed, globally-calibrated positive-class rate.
 
     Why this exists
@@ -201,7 +202,7 @@ class StratifiedBatchSampler(Sampler[List[int]]):
         perm = torch.randperm(len(tensor), generator=self._generator)
         return tensor[perm]
 
-    def __iter__(self) -> Iterator[List[int]]:
+    def __iter__(self) -> Iterator[list[int]]:
         # Per-epoch shuffle of each pool independently, then stride through.
         pos = self._shuffled(self._pos_indices)
         neg = self._shuffled(self._neg_indices)
