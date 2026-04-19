@@ -41,7 +41,7 @@ import json
 import time
 import warnings
 from pathlib import Path
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Optional
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -89,7 +89,7 @@ warnings.filterwarnings("ignore", category=FutureWarning)
 # with the exploratory-analysis figures that precede them.
 # -----------------------------------------------------------------------------
 
-TUNING_GRID: Dict[str, list] = {
+TUNING_GRID: dict[str, list] = {
     "n_estimators": [100, 200, 300, 500, 1000],
     "max_depth": [5, 10, 15, 20, 30, None],
     "min_samples_split": [2, 5, 10, 20],
@@ -152,7 +152,7 @@ def train_baseline(
     X_train: pd.DataFrame,
     y_train: pd.Series,
     seed: int = RANDOM_SEED,
-) -> Tuple[RandomForestClassifier, float]:
+) -> tuple[RandomForestClassifier, float]:
     """Fit a 100-tree RF at sklearn defaults; return ``(model, fit_seconds)``.
 
     This is the "untuned baseline" quoted against the tuned RF to show how
@@ -170,7 +170,7 @@ def train_baseline(
 def tune_hyperparameters(
     X_train: pd.DataFrame,
     y_train: pd.Series,
-    param_grid: Optional[Dict[str, list]] = None,
+    param_grid: Optional[dict[str, list]] = None,
     n_iter: int = 60,
     n_cv_folds: int = 5,
     seed: int = RANDOM_SEED,
@@ -250,7 +250,7 @@ def evaluate_model(
     y: pd.Series,
     split_name: str = "test",
     threshold: float = 0.5,
-) -> Tuple[Dict[str, Any], np.ndarray, np.ndarray]:
+) -> tuple[dict[str, Any], np.ndarray, np.ndarray]:
     """Score ``model`` on ``(X, y)`` at the given decision threshold.
 
     The returned ``metrics`` dict covers accuracy / precision / recall / F1 /
@@ -409,7 +409,7 @@ def compute_feature_importance(
 def optimize_threshold(
     y_val: pd.Series,
     y_val_prob: np.ndarray,
-) -> Tuple[float, pd.DataFrame]:
+) -> tuple[float, pd.DataFrame]:
     """Pick the decision threshold that maximises F1 on the validation split.
 
     Sweeps τ ∈ ``[0.10, 0.90]`` in 0.01 steps (81 candidates) and returns the
@@ -801,11 +801,11 @@ def plot_tuning_analysis(
 
 
 def export_results(
-    baseline_metrics: Dict,
-    tuned_metrics: Dict,
+    baseline_metrics: dict,
+    tuned_metrics: dict,
     cv_df: pd.DataFrame,
     importance_df: pd.DataFrame,
-    best_params: Dict,
+    best_params: dict,
     best_threshold: float,
     output_dir: str = "results/baseline",
 ) -> None:
@@ -865,7 +865,7 @@ def run_rf_benchmark(
     *,
     mode: str = "auto",
     allow_fallback: bool = True,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Run the full RF benchmark end-to-end.
 
     Pipeline: load raw → normalise schema → clean categoricals → engineer

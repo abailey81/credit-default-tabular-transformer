@@ -6,7 +6,7 @@ from __future__ import annotations
 import json
 from argparse import Namespace
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any
 
 import numpy as np
 import pytest
@@ -171,7 +171,7 @@ def test_compute_classification_metrics_handles_single_class_gracefully():
     assert np.isnan(m["auc_roc"])
 
 
-def _mini_batch(B: int = 4) -> Dict[str, Any]:
+def _mini_batch(B: int = 4) -> dict[str, Any]:
     torch.manual_seed(0)
     sex = torch.arange(B) % 2
     edu = torch.arange(B) % 4

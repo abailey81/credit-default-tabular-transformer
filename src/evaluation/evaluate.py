@@ -32,7 +32,7 @@ import argparse
 import json
 import logging
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Optional
 
 import numpy as np
 import pandas as pd
@@ -47,7 +47,7 @@ logger = logging.getLogger(__name__)
 #: Column order for the comparison table. Ordering is intentional:
 #: discrimination first (AUC, AP, F1), then threshold-sensitive metrics,
 #: then calibration. The report reads left-to-right top-down.
-REPORTED_METRICS: Tuple[str, ...] = (
+REPORTED_METRICS: tuple[str, ...] = (
     "auc_roc",
     "auc_pr",
     "f1",
@@ -64,7 +64,7 @@ REPORTED_METRICS: Tuple[str, ...] = (
 #: Brier are absent -- those require raw probs, which the CSV doesn't carry.
 #: If ``--rf-predictions`` is set we recompute the full bundle from the npz
 #: and ignore this list entirely.
-_RF_METRIC_COLUMNS: Tuple[str, ...] = (
+_RF_METRIC_COLUMNS: tuple[str, ...] = (
     "auc_roc",
     "auc_pr",
     "f1",
@@ -85,7 +85,7 @@ DEFAULT_THRESHOLD: float = 0.5
 # ---------------------------------------------------------------------------
 
 
-def load_test_metrics(run_dir: Path) -> Dict[str, Any]:
+def load_test_metrics(run_dir: Path) -> dict[str, Any]:
     """Read one run's test-split artefacts off disk.
 
     Parameters
@@ -130,7 +130,7 @@ def load_test_metrics(run_dir: Path) -> Dict[str, Any]:
     }
 
 
-def load_rf_from_predictions(rf_dir: Path) -> Optional[Dict[str, Any]]:
+def load_rf_from_predictions(rf_dir: Path) -> Optional[dict[str, Any]]:
     """Read the per-row RF predictions written by ``rf_predictions.py``.
 
     Returns ``None`` if either artefact is missing, so the caller can
@@ -154,7 +154,7 @@ def load_rf_from_predictions(rf_dir: Path) -> Optional[Dict[str, Any]]:
     }
 
 
-def load_rf_metrics(csv_path: Path) -> Dict[str, Dict[str, float]]:
+def load_rf_metrics(csv_path: Path) -> dict[str, dict[str, float]]:
     """Extract the RF_baseline / RF_tuned rows from ``rf_metrics.csv``.
 
     The CSV uses ``avg_precision`` as the column name for AP; we rename
@@ -173,7 +173,7 @@ def load_rf_metrics(csv_path: Path) -> Dict[str, Dict[str, float]]:
         raise FileNotFoundError(f"Missing {csv_path}")
 
     df = pd.read_csv(csv_path)
-    out: Dict[str, Dict[str, float]] = {}
+    out: dict[str, dict[str, float]] = {}
 
     for display_name, model_key in (("rf_baseline", "RF_baseline"), ("rf_tuned", "RF_tuned")):
         match = df[df["model"] == model_key]
@@ -202,7 +202,7 @@ def compute_additional_metrics(
     y_true: np.ndarray,
     y_prob: np.ndarray,
     threshold: float = DEFAULT_THRESHOLD,
-) -> Dict[str, float]:
+) -> dict[str, float]:
     """Cohen's kappa + specificity at ``threshold``.
 
     Both metrics matter for imbalanced classification on this dataset.
@@ -228,7 +228,7 @@ def compute_additional_metrics(
     return {"cohen_kappa": kappa, "specificity": specificity}
 
 
-def metrics_for_run(run: Dict[str, Any]) -> Dict[str, float]:
+def metrics_for_run(run: dict[str, Any]) -> dict[str, float]:
     """Union of ``train.py``'s metric bundle with kappa + specificity.
 
     Both use the same threshold that ``train.py`` used at test time,
@@ -250,12 +250,12 @@ def metrics_for_run(run: Dict[str, Any]) -> Dict[str, float]:
 
 
 def ensemble_run(
-    runs: List[Dict[str, Any]],
+    runs: list[dict[str, Any]],
     *,
     mode: str = "arithmetic",
     display_name: str = "ensemble",
     threshold: float = DEFAULT_THRESHOLD,
-) -> Optional[Dict[str, Any]]:
+) -> Optional[dict[str, Any]]:
     """Average per-seed probabilities into a single ensemble run.
 
     Parameters
@@ -330,7 +330,7 @@ def ensemble_run(
     }
 
 
-def aggregate_runs(runs: List[Dict[str, Any]]) -> Dict[str, Any]:
+def aggregate_runs(runs: list[dict[str, Any]]) -> dict[str, Any]:
     """Collapse N per-seed runs into a single ``mean +/- std`` summary.
 
     Uses the unbiased sample std (``ddof=1``) when n > 1; returns 0.0
@@ -387,12 +387,12 @@ def _format_mean_std(mean: float, std: float, n: int, digits: int = 4) -> str:
 
 
 def build_comparison_table(
-    transformer_from_scratch: Optional[Dict[str, Any]],
-    transformer_mtlm: Optional[Dict[str, Any]],
-    rf: Dict[str, Dict[str, float]],
+    transformer_from_scratch: Optional[dict[str, Any]],
+    transformer_mtlm: Optional[dict[str, Any]],
+    rf: dict[str, dict[str, float]],
     *,
-    ensemble: Optional[Dict[str, Any]] = None,
-    rf_full: Optional[Dict[str, Any]] = None,
+    ensemble: Optional[dict[str, Any]] = None,
+    rf_full: Optional[dict[str, Any]] = None,
 ) -> pd.DataFrame:
     """Assemble the report's model-comparison table.
 
@@ -409,9 +409,9 @@ def build_comparison_table(
     Missing inputs produce skipped rows rather than blanks; the table
     is meant to be ``cat``-able and copy-pasted into the report.
     """
-    rows: List[Dict[str, Any]] = []
+    rows: list[dict[str, Any]] = []
 
-    def _blank_row(name: str) -> Dict[str, Any]:
+    def _blank_row(name: str) -> dict[str, Any]:
         # Em-dash placeholder: renders unambiguously in both CSV and
         # Markdown, and is obviously a gap rather than a 0.
         return {"model": name, **{k: "—" for k in REPORTED_METRICS}}
@@ -547,14 +547,14 @@ def _build_parser() -> argparse.ArgumentParser:
     return p
 
 
-def _load_all_or_empty(run_dirs: List[Path]) -> List[Dict[str, Any]]:
+def _load_all_or_empty(run_dirs: list[Path]) -> list[dict[str, Any]]:
     """Load every run dir that actually has artefacts; skip (warn on) the rest.
 
     argparse defaults don't run ``type=`` conversion, so we re-``Path`` each
     entry here -- otherwise the default string paths would silently go
     through ``is_dir`` on the literal string and fail on Windows.
     """
-    out: List[Dict[str, Any]] = []
+    out: list[dict[str, Any]] = []
     for d in run_dirs:
         d = Path(d)
         if not d.is_dir():
@@ -567,7 +567,7 @@ def _load_all_or_empty(run_dirs: List[Path]) -> List[Dict[str, Any]]:
     return out
 
 
-def main(argv: Optional[List[str]] = None) -> int:
+def main(argv: Optional[list[str]] = None) -> int:
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s %(levelname)-8s %(name)s  %(message)s",

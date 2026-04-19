@@ -32,9 +32,10 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Optional
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -76,7 +77,7 @@ EDUCATION_LABELS = {
 }
 MARRIAGE_LABELS = {1: "Married", 2: "Single", 3: "Other"}
 
-ATTRIBUTE_LABELS: Dict[str, Dict[int, str]] = {
+ATTRIBUTE_LABELS: dict[str, dict[int, str]] = {
     "SEX": SEX_LABELS,
     "EDUCATION": EDUCATION_LABELS,
     "MARRIAGE": MARRIAGE_LABELS,
@@ -120,7 +121,7 @@ def _subgroup_metrics(
     y: np.ndarray,
     p: np.ndarray,
     threshold: float = 0.5,
-) -> Dict[str, float]:
+) -> dict[str, float]:
     """Compute every metric we report for one subgroup.
 
     Defensive around single-class subgroups: AUC returns NaN (sklearn
@@ -167,7 +168,7 @@ def audit_attribute(
     run_name: str,
     calibrator: str,
     threshold: float = 0.5,
-) -> List[SubgroupMetrics]:
+) -> list[SubgroupMetrics]:
     """Audit one protected attribute on one run's predictions.
 
     Produces one :class:`SubgroupMetrics` per unique value of
@@ -206,7 +207,7 @@ def audit_attribute(
     """
     unique_vals = sorted(np.unique(attribute_values).tolist())
     labels = ATTRIBUTE_LABELS.get(attribute_name, {})
-    out: List[SubgroupMetrics] = []
+    out: list[SubgroupMetrics] = []
     for v in unique_vals:
         mask = attribute_values == v
         if mask.sum() == 0:
@@ -248,7 +249,7 @@ def disparity_table(
     df = pd.DataFrame([s.__dict__ for s in subgroups])
     if df.empty:
         return df
-    rows: List[Dict[str, Any]] = []
+    rows: list[dict[str, Any]] = []
     for (run, attr, cal), grp in df.groupby(["run_name", "attribute", "calibrator"]):
         ref = grp.loc[grp["n"].idxmax()]
         for _, row in grp.iterrows():
@@ -358,8 +359,8 @@ def plot_subgroup_reliability(
         p_sub = p[mask]
         y_sub = y[mask]
         edges = np.linspace(0.0, 1.0, n_bins + 1)
-        confs: List[float] = []
-        accs: List[float] = []
+        confs: list[float] = []
+        accs: list[float] = []
         for j in range(n_bins):
             lo, hi = edges[j], edges[j + 1]
             # Right-inclusive last bin for the same reason as calibration.py:
@@ -395,7 +396,7 @@ def audit_run(
     use_platt: bool = True,
     attribute_names: Sequence[str] = ("SEX", "EDUCATION", "MARRIAGE"),
     threshold: float = 0.5,
-) -> Tuple[List[SubgroupMetrics], Dict[str, np.ndarray]]:
+) -> tuple[list[SubgroupMetrics], dict[str, np.ndarray]]:
     """Audit a single run end-to-end.
 
     Row-order alignment between ``test_predictions.npz`` and
@@ -427,7 +428,7 @@ def audit_run(
             f"raw={len(test_raw)}. Check alignment."
         )
 
-    results: List[SubgroupMetrics] = []
+    results: list[SubgroupMetrics] = []
     for attr in attribute_names:
         if attr not in test_raw.columns:
             logger.warning("Attribute %s missing from test_raw.csv, skipping", attr)
@@ -483,7 +484,7 @@ def _build_parser() -> argparse.ArgumentParser:
     return p
 
 
-def main(argv: Optional[List[str]] = None) -> int:
+def main(argv: Optional[list[str]] = None) -> int:
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s %(levelname)-8s %(name)s  %(message)s",
@@ -497,8 +498,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         return 1
     test_raw = pd.read_csv(test_raw_path)
 
-    all_results: List[SubgroupMetrics] = []
-    primary_extras: Optional[Dict[str, np.ndarray]] = None
+    all_results: list[SubgroupMetrics] = []
+    primary_extras: Optional[dict[str, np.ndarray]] = None
 
     for run_dir in args.runs:
         run_dir = Path(run_dir)

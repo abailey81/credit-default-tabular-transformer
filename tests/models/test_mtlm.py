@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict
+from typing import Any
 
 import pytest
 import torch
@@ -10,15 +10,10 @@ import torch
 from src.models.model import TabularTransformer  # noqa: E402
 from src.models.mtlm import MTLMHead, MTLMLossComponents, MTLMModel, mtlm_loss  # noqa: E402
 from src.models.transformer import (  # noqa: E402
-    FeatureGroupBias,
-    TemporalDecayBias,
     TransformerEncoder,
 )
 from src.tokenization.embedding import (  # noqa: E402
-    N_FEATURE_GROUPS,
     FeatureEmbedding,
-    build_group_assignment,
-    build_temporal_layout,
 )
 from src.tokenization.tokenizer import (  # noqa: E402
     CATEGORICAL_FEATURES,
@@ -29,12 +24,12 @@ from src.tokenization.tokenizer import (  # noqa: E402
 
 
 @pytest.fixture()
-def tiny_cat_vocab_sizes() -> Dict[str, int]:
+def tiny_cat_vocab_sizes() -> dict[str, int]:
     return {"SEX": 2, "EDUCATION": 4, "MARRIAGE": 3}
 
 
 @pytest.fixture()
-def mtlm_batch() -> Dict[str, Any]:
+def mtlm_batch() -> dict[str, Any]:
     B = 4
     mask = torch.zeros(B, 23, dtype=torch.bool)
     # 1 cat (SEX r0), 2 PAYs (PAY_0 r1, PAY_6 r2), 1 num (LIMIT_BAL r3 @ pos 9)

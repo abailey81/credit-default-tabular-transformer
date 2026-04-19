@@ -35,7 +35,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Optional
 
 import torch
 import torch.nn as nn
@@ -54,7 +54,7 @@ from .tokenizer import (
 # Every consumer of per-token attention, per-token importance, or
 # per-group masking should go through TOKEN_ORDER (or build_group_assignment
 # / build_temporal_layout below) rather than hard-code slice boundaries.
-TOKEN_ORDER: List[str] = CATEGORICAL_FEATURES + PAY_STATUS_FEATURES + NUMERICAL_FEATURES
+TOKEN_ORDER: list[str] = CATEGORICAL_FEATURES + PAY_STATUS_FEATURES + NUMERICAL_FEATURES
 
 # Slice views into the 23-token pre-CLS block. Used by TemporalDecayBias /
 # FeatureGroupBias and anything else that masks by group.
@@ -70,7 +70,7 @@ _SLICE_NUM = slice(9, 23)
 # PAY_0 / BILL_AMT1 / PAY_AMT1 all share month 0 — they correspond to
 # the same calendar period even though the UCI naming is inconsistent.
 N_MONTHS = 6
-_TEMPORAL_MONTH: Dict[str, int] = {}
+_TEMPORAL_MONTH: dict[str, int] = {}
 for _i, _feat in enumerate(PAY_STATUS_FEATURES):
     _TEMPORAL_MONTH[_feat] = _i
 for _i, _feat in enumerate([f"BILL_AMT{_m}" for _m in range(1, 7)]):
@@ -97,7 +97,7 @@ _METADATA_PATH = (
 
 def load_cat_vocab_sizes(
     metadata_path: Optional[Path] = None,
-) -> Dict[str, int]:
+) -> dict[str, int]:
     """Read categorical vocab sizes from ``feature_metadata.json``.
 
     Prefer passing ``cat_vocab_sizes`` directly to ``FeatureEmbedding`` in
@@ -139,7 +139,7 @@ def __getattr__(name: str):
 # Source of truth for TemporalDecayBias (N3), FeatureGroupBias (N2), and
 # every interpretability consumer that needs "which positions are PAY".
 
-_TEMPORAL_GROUPS: Dict[str, List[str]] = {
+_TEMPORAL_GROUPS: dict[str, list[str]] = {
     "pay": list(PAY_STATUS_FEATURES),
     "bill": [f"BILL_AMT{_m}" for _m in range(1, 7)],
     "pay_amt": [f"PAY_AMT{_m}" for _m in range(1, 7)],
@@ -157,7 +157,7 @@ FEATURE_GROUP_PAY_AMT = 4
 N_FEATURE_GROUPS = 5
 
 # Readable names for attention heatmaps and attribution panels.
-FEATURE_GROUP_NAMES: Dict[int, str] = {
+FEATURE_GROUP_NAMES: dict[int, str] = {
     FEATURE_GROUP_CLS: "CLS",
     FEATURE_GROUP_DEMOGRAPHIC: "demographic",
     FEATURE_GROUP_PAY: "PAY",
@@ -183,7 +183,7 @@ def _group_for_feature(feature_name: str) -> int:
     raise KeyError(f"No group defined for feature {feature_name!r}")
 
 
-def build_group_assignment(cls_offset: int = 1) -> List[int]:
+def build_group_assignment(cls_offset: int = 1) -> list[int]:
     """Group-index list for ``FeatureGroupBias``.
 
     Length ``len(TOKEN_ORDER) + cls_offset`` (24 by default with one [CLS]
@@ -191,7 +191,7 @@ def build_group_assignment(cls_offset: int = 1) -> List[int]:
     feature is added or reordered. Pass ``cls_offset=0`` to address the
     pre-CLS 23-block directly (used by a few interpretability tools).
     """
-    assignment: List[int] = [FEATURE_GROUP_CLS] * cls_offset
+    assignment: list[int] = [FEATURE_GROUP_CLS] * cls_offset
     assignment.extend(_group_for_feature(f) for f in TOKEN_ORDER)
     return assignment
 
@@ -204,7 +204,7 @@ def describe_token_layout(cls_offset: int = 1) -> str:
     when reviewing attention rollouts where "position 9" needs to map
     back to a feature name.
     """
-    lines: List[str] = []
+    lines: list[str] = []
     header = f"{'pos':>4}  {'group':<13}  {'feature':<13}  {'month':>5}"
     sep = "-" * len(header)
     lines.append(header)
@@ -229,7 +229,7 @@ def describe_token_layout(cls_offset: int = 1) -> str:
 
 def build_temporal_layout(
     cls_offset: int = 1,
-) -> Dict[str, Dict[str, List[int]]]:
+) -> dict[str, dict[str, list[int]]]:
     """Build the ``temporal_layout`` dict that ``TemporalDecayBias`` consumes.
 
     Maps group name (``"pay"`` / ``"bill"`` / ``"pay_amt"``) to
@@ -238,7 +238,7 @@ def build_temporal_layout(
     when the caller prepends their own special tokens or works on a flat
     23-sequence view.
     """
-    layout: Dict[str, Dict[str, List[int]]] = {}
+    layout: dict[str, dict[str, list[int]]] = {}
     for group_name, feat_list in _TEMPORAL_GROUPS.items():
         layout[group_name] = {
             "positions": [cls_offset + TOKEN_ORDER.index(f) for f in feat_list],
@@ -290,7 +290,7 @@ class FeatureEmbedding(nn.Module):
         d_model: int = 32,
         dropout: float = 0.1,
         *,
-        cat_vocab_sizes: Optional[Dict[str, int]] = None,
+        cat_vocab_sizes: Optional[dict[str, int]] = None,
         use_temporal_pos: bool = False,
         use_mask_token: bool = False,
     ):
@@ -307,7 +307,7 @@ class FeatureEmbedding(nn.Module):
                 f"cat_vocab_sizes is missing entries for {sorted(missing)}; "
                 f"got {sorted(cat_vocab_sizes.keys())}"
             )
-        self.cat_vocab_sizes: Dict[str, int] = dict(cat_vocab_sizes)
+        self.cat_vocab_sizes: dict[str, int] = dict(cat_vocab_sizes)
 
         # One embedding table per categorical feature. Using a ModuleDict
         # rather than a single big table with offsets keeps state-dict
@@ -384,7 +384,7 @@ class FeatureEmbedding(nn.Module):
         if self.temporal_pos_embedding is not None:
             nn.init.normal_(self.temporal_pos_embedding.weight, mean=0.0, std=0.02)
 
-    def forward(self, batch: Dict[str, torch.Tensor]) -> torch.Tensor:
+    def forward(self, batch: dict[str, torch.Tensor]) -> torch.Tensor:
         B = batch["num_values"].shape[0]
         device = batch["num_values"].device
 
@@ -477,9 +477,9 @@ class FeatureEmbedding(nn.Module):
 
     def init_from_pretrained_statedict(
         self,
-        state_dict: Dict[str, torch.Tensor],
+        state_dict: dict[str, torch.Tensor],
         strict: bool = False,
-    ) -> Dict[str, List[str]]:
+    ) -> dict[str, list[str]]:
         """Copy embedding-relevant tensors out of a larger checkpoint.
 
         Designed for the MTLM -> supervised handover: an MTLM model is a
@@ -520,8 +520,8 @@ class FeatureEmbedding(nn.Module):
         # (no wrapper) skips the prefix hunt entirely.
         candidate_prefixes = ("", "embedding.", "feature_embedding.", "module.")
 
-        normalised: Dict[str, torch.Tensor] = {}
-        unexpected: List[str] = []
+        normalised: dict[str, torch.Tensor] = {}
+        unexpected: list[str] = []
         for raw_key, tensor in state_dict.items():
             matched_own: Optional[str] = None
             for prefix in candidate_prefixes:
@@ -539,7 +539,7 @@ class FeatureEmbedding(nn.Module):
             if matched_own not in normalised:
                 normalised[matched_own] = tensor
 
-        loaded: List[str] = []
+        loaded: list[str] = []
         for key, tensor in normalised.items():
             own = self.state_dict()[key]
             if own.shape != tensor.shape:
@@ -577,7 +577,7 @@ if __name__ == "__main__":
     # Build a batch with non-zero severity on delinquent states so the
     # severity projection actually gets exercised (zero severity on every
     # row would leave its gradient empty and mask a bug).
-    batch: Dict[str, torch.Tensor] = {
+    batch: dict[str, torch.Tensor] = {
         "cat_indices": {
             "SEX": torch.tensor([0, 1, 0, 1]),
             "EDUCATION": torch.tensor([0, 1, 2, 3]),

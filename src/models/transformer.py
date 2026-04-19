@@ -37,7 +37,7 @@ tokenizer layout at construction time. Always go through
 loaded checkpoint.
 """
 
-from typing import List, Literal, Optional
+from typing import Literal, Optional
 
 import torch
 import torch.nn as nn
@@ -274,7 +274,7 @@ class FeatureGroupBias(nn.Module):
 
     def __init__(
         self,
-        group_assignment: List[int],
+        group_assignment: list[int],
         n_groups: int = 5,
         mode: Literal["scalar", "per_head", "off"] = "scalar",
         n_heads: int = 1,

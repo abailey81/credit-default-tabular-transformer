@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any
 
 import numpy as np
 import pytest
@@ -14,7 +14,7 @@ from src.evaluation import visualise as vis  # noqa: E402
 
 
 @pytest.fixture
-def fake_runs() -> List[Dict[str, Any]]:
+def fake_runs() -> list[dict[str, Any]]:
     rng = np.random.default_rng(0)
     n = 500
     y_true = rng.integers(0, 2, size=n)
@@ -39,7 +39,7 @@ def fake_runs() -> List[Dict[str, Any]]:
 
 
 @pytest.fixture
-def fake_rf_ref() -> Dict[str, float]:
+def fake_rf_ref() -> dict[str, float]:
     return {"auc_roc": 0.7845, "auc_pr": 0.5673}
 
 

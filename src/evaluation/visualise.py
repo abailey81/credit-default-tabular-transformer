@@ -24,7 +24,7 @@ import argparse
 import json
 import logging
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Optional
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -51,7 +51,7 @@ RELIABILITY_N_BINS: int = 10
 
 #: Stable run-directory -> legend-label mapping. Keeps the same seed
 #: labelled the same way across every figure in the report.
-RUN_DISPLAY_NAMES: Dict[str, str] = {
+RUN_DISPLAY_NAMES: dict[str, str] = {
     "seed_42": "Transformer (seed 42)",
     "seed_1": "Transformer (seed 1)",
     "seed_2": "Transformer (seed 2)",
@@ -61,7 +61,7 @@ RUN_DISPLAY_NAMES: Dict[str, str] = {
 #: Okabe-Ito (CVD-safe). Exactly the same palette ``src.analysis.eda``
 #: uses for the default-vs-non-default contrast, to keep figure aesthetics
 #: consistent between the EDA and the evaluation chapters.
-RUN_COLOURS: Dict[str, str] = {
+RUN_COLOURS: dict[str, str] = {
     "seed_42": "#0072B2",
     "seed_1": "#D55E00",
     "seed_2": "#009E73",
@@ -76,7 +76,7 @@ DEFAULT_FIG_DPI: int = 150
 # ---------------------------------------------------------------------------
 
 
-def load_predictions(run_dir: Path) -> Dict[str, Any]:
+def load_predictions(run_dir: Path) -> dict[str, Any]:
     """Load per-row test predictions and their headline metrics for one run.
 
     Returns a single flat dict -- the plotting helpers pull what they need
@@ -100,7 +100,7 @@ def load_training_log(run_dir: Path) -> pd.DataFrame:
     return pd.read_csv(Path(run_dir) / "train_log.csv")
 
 
-def load_rf_reference(csv_path: Path) -> Optional[Dict[str, float]]:
+def load_rf_reference(csv_path: Path) -> Optional[dict[str, float]]:
     """Pick out the RF_tuned row from ``rf_metrics.csv`` for annotation.
 
     Returns ``None`` when the CSV or the row is missing; the callers then
@@ -118,7 +118,7 @@ def load_rf_reference(csv_path: Path) -> Optional[Dict[str, float]]:
     return {"auc_roc": float(row["auc_roc"]), "auc_pr": float(row["avg_precision"])}
 
 
-def _style(run_name: str) -> Tuple[str, str]:
+def _style(run_name: str) -> tuple[str, str]:
     """Return (legend label, line colour) for a run directory name.
 
     Unknown runs fall back to mid-grey so they're visible but visually
@@ -135,8 +135,8 @@ def _style(run_name: str) -> Tuple[str, str]:
 
 
 def plot_roc_curves(
-    runs: List[Dict[str, Any]],
-    rf_ref: Optional[Dict[str, float]],
+    runs: list[dict[str, Any]],
+    rf_ref: Optional[dict[str, float]],
     out_path: Path,
 ) -> None:
     """ROC per seed plus chance diagonal and RF text annotation.
@@ -185,8 +185,8 @@ def plot_roc_curves(
 
 
 def plot_pr_curves(
-    runs: List[Dict[str, Any]],
-    rf_ref: Optional[Dict[str, float]],
+    runs: list[dict[str, Any]],
+    rf_ref: Optional[dict[str, float]],
     out_path: Path,
 ) -> None:
     """Precision-Recall per seed plus the no-skill line and RF annotation.
@@ -242,7 +242,7 @@ def plot_pr_curves(
 # ---------------------------------------------------------------------------
 
 
-def plot_confusion_matrices(runs: List[Dict[str, Any]], out_path: Path) -> None:
+def plot_confusion_matrices(runs: list[dict[str, Any]], out_path: Path) -> None:
     """Grid of 2x2 confusion matrices, one subplot per run.
 
     Cell text switches to white once the count exceeds half the matrix max
@@ -298,7 +298,7 @@ def plot_confusion_matrices(runs: List[Dict[str, Any]], out_path: Path) -> None:
 
 
 def plot_training_curves(
-    run_dirs: List[Path],
+    run_dirs: list[Path],
     out_path: Path,
 ) -> None:
     """Two-panel training diagnostic: train loss (left) + val AUC-ROC (right).
@@ -343,7 +343,7 @@ def _reliability_bins(
     y_true: np.ndarray,
     y_prob: np.ndarray,
     n_bins: int = RELIABILITY_N_BINS,
-) -> Tuple[np.ndarray, np.ndarray]:
+) -> tuple[np.ndarray, np.ndarray]:
     """Per-bin (mean predicted probability, observed positive rate).
 
     Equal-width bins to match :mod:`src.evaluation.calibration`'s default.
@@ -365,7 +365,7 @@ def _reliability_bins(
     return np.array(means), np.array(rates)
 
 
-def plot_reliability_diagrams(runs: List[Dict[str, Any]], out_path: Path) -> None:
+def plot_reliability_diagrams(runs: list[dict[str, Any]], out_path: Path) -> None:
     """All seeds on one axis so over-confidence is visible at a glance.
 
     The module ``calibration`` handles the per-calibrator breakdown; here
@@ -434,7 +434,7 @@ def _build_parser() -> argparse.ArgumentParser:
     return p
 
 
-def main(argv: Optional[List[str]] = None) -> int:
+def main(argv: Optional[list[str]] = None) -> int:
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s %(levelname)-8s %(name)s  %(message)s",

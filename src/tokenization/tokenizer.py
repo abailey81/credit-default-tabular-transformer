@@ -39,7 +39,8 @@ dominates for small batches).
 from __future__ import annotations
 
 import logging
-from typing import Dict, List, Optional, Sequence, Tuple
+from collections.abc import Sequence
+from typing import Optional
 
 import numpy as np
 import pandas as pd
@@ -55,15 +56,15 @@ logger = logging.getLogger(__name__)
 # ``validate_dataframe_schema`` has no cross-module import and can run
 # before preprocessing outputs exist (tests, fresh clones).
 
-CATEGORICAL_FEATURES: List[str] = ["SEX", "EDUCATION", "MARRIAGE"]
+CATEGORICAL_FEATURES: list[str] = ["SEX", "EDUCATION", "MARRIAGE"]
 
-DEMOGRAPHIC_FEATURES: List[str] = ["LIMIT_BAL", "SEX", "EDUCATION", "MARRIAGE", "AGE"]
+DEMOGRAPHIC_FEATURES: list[str] = ["LIMIT_BAL", "SEX", "EDUCATION", "MARRIAGE", "AGE"]
 
-PAY_STATUS_FEATURES: List[str] = ["PAY_0", "PAY_2", "PAY_3", "PAY_4", "PAY_5", "PAY_6"]
+PAY_STATUS_FEATURES: list[str] = ["PAY_0", "PAY_2", "PAY_3", "PAY_4", "PAY_5", "PAY_6"]
 
-BILL_AMT_FEATURES: List[str] = [f"BILL_AMT{i}" for i in range(1, 7)]
-PAY_AMT_FEATURES: List[str] = [f"PAY_AMT{i}" for i in range(1, 7)]
-NUMERICAL_FEATURES: List[str] = ["LIMIT_BAL", "AGE"] + BILL_AMT_FEATURES + PAY_AMT_FEATURES  # 14
+BILL_AMT_FEATURES: list[str] = [f"BILL_AMT{i}" for i in range(1, 7)]
+PAY_AMT_FEATURES: list[str] = [f"PAY_AMT{i}" for i in range(1, 7)]
+NUMERICAL_FEATURES: list[str] = ["LIMIT_BAL", "AGE"] + BILL_AMT_FEATURES + PAY_AMT_FEATURES  # 14
 
 TARGET_COL = "DEFAULT"
 
@@ -82,7 +83,7 @@ N_PAY_STATES = 4
 
 # Readable names for logs, notebooks, and the §7.1 diagnostic panels.
 # Keyed on the state id so consumers can round-trip without magic numbers.
-PAY_STATE_NAMES: Dict[int, str] = {
+PAY_STATE_NAMES: dict[int, str] = {
     PAY_STATE_NO_BILL: "no_bill",
     PAY_STATE_PAID_FULL: "paid_full",
     PAY_STATE_MINIMUM: "minimum",
@@ -108,7 +109,7 @@ class PAYValueError(ValueError):
 # ---------------------------------------------------------------------------
 
 
-def build_categorical_vocab(metadata: Dict) -> Dict[str, Dict[int, int]]:
+def build_categorical_vocab(metadata: dict) -> dict[str, dict[int, int]]:
     """Per-feature ``{raw_value -> local_idx}`` map for the demographics.
 
     Indices follow sorted-integer order so the layout matches the embedding
@@ -119,7 +120,7 @@ def build_categorical_vocab(metadata: Dict) -> Dict[str, Dict[int, int]]:
     documented "Others" bin (EDUCATION=4, MARRIAGE=3) *upstream*, in the
     cleaning layer, not here.
     """
-    vocab: Dict[str, Dict[int, int]] = {}
+    vocab: dict[str, dict[int, int]] = {}
     for feature in CATEGORICAL_FEATURES:
         value_map = metadata["categorical_features"][feature]["value_to_idx"]
         sorted_values = sorted(value_map.keys(), key=lambda x: int(x))
@@ -127,7 +128,7 @@ def build_categorical_vocab(metadata: Dict) -> Dict[str, Dict[int, int]]:
     return vocab
 
 
-def build_numerical_vocab() -> Dict[str, int]:
+def build_numerical_vocab() -> dict[str, int]:
     """``{feature -> identity_idx}`` for the numerical features.
 
     Production code just enumerates ``NUMERICAL_FEATURES`` directly, but
@@ -145,7 +146,7 @@ def build_numerical_vocab() -> Dict[str, int]:
 def validate_dataframe_schema(
     df: pd.DataFrame,
     strict: bool = True,
-) -> Dict[str, object]:
+) -> dict[str, object]:
     """Check a post-rename DataFrame against the tokeniser's schema.
 
     Run this right after column rename + cleaning, before feature
@@ -178,7 +179,7 @@ def validate_dataframe_schema(
         (column -> sorted bad values), ``nan_columns``,
         ``non_integer_columns``, ``ok``.
     """
-    required: List[str] = (
+    required: list[str] = (
         DEMOGRAPHIC_FEATURES
         + PAY_STATUS_FEATURES
         + BILL_AMT_FEATURES
@@ -193,7 +194,7 @@ def validate_dataframe_schema(
     # already flagged and checking .isna() on it would raise KeyError.
     nan_cols = [c for c in present if df[c].isna().any()]
 
-    invalid_pay: Dict[str, List[int]] = {}
+    invalid_pay: dict[str, list[int]] = {}
     for col in PAY_STATUS_FEATURES:
         if col not in df.columns:
             continue
@@ -212,7 +213,7 @@ def validate_dataframe_schema(
 
     # Accept integer-coercible floats (1.0 is fine) but reject genuine
     # non-integers (1.5 is not). Round-trip cast catches the latter.
-    non_int_cat: List[str] = []
+    non_int_cat: list[str] = []
     for col in CATEGORICAL_FEATURES:
         if col not in df.columns:
             continue
@@ -224,7 +225,7 @@ def validate_dataframe_schema(
         except (TypeError, ValueError):
             non_int_cat.append(col)
 
-    report: Dict[str, object] = {
+    report: dict[str, object] = {
         "n_rows": int(len(df)),
         "missing_columns": missing,
         "invalid_pay_values": invalid_pay,
@@ -234,7 +235,7 @@ def validate_dataframe_schema(
     }
 
     if strict and not report["ok"]:
-        issues: List[str] = []
+        issues: list[str] = []
         if missing:
             issues.append(f"missing columns: {missing}")
         if nan_cols:
@@ -249,8 +250,8 @@ def validate_dataframe_schema(
 
 
 def tokenization_summary(
-    tensors_dict: Dict[str, object],
-) -> Dict[str, object]:
+    tensors_dict: dict[str, object],
+) -> dict[str, object]:
     """Diagnostic summary over a ``tokenize_dataframe`` output.
 
     One pass over pre-built tensors — cheap enough to call once per run
@@ -271,14 +272,14 @@ def tokenization_summary(
     n_rows = int(labels.shape[0])
     positive_rate = float(labels.float().mean().item()) if n_rows > 0 else 0.0
 
-    cat_value_counts: Dict[str, Dict[int, int]] = {}
-    cat_tensors: Dict[str, torch.Tensor] = tensors_dict["cat_indices"]  # type: ignore[assignment]
+    cat_value_counts: dict[str, dict[int, int]] = {}
+    cat_tensors: dict[str, torch.Tensor] = tensors_dict["cat_indices"]  # type: ignore[assignment]
     for feat in CATEGORICAL_FEATURES:
         values, counts = torch.unique(cat_tensors[feat], return_counts=True)
         cat_value_counts[feat] = {int(v): int(c) for v, c in zip(values.tolist(), counts.tolist())}
 
     pay_state_ids: torch.Tensor = tensors_dict["pay_state_ids"]  # type: ignore[assignment]
-    state_distribution: Dict[str, int] = {}
+    state_distribution: dict[str, int] = {}
     for sid, sname in PAY_STATE_NAMES.items():
         state_distribution[sname] = int((pay_state_ids == sid).sum().item())
 
@@ -293,7 +294,7 @@ def tokenization_summary(
     # somehow missed, plus unusual post-scaling outliers (e.g. a bill
     # amount that scaled to ±40 sigma is almost certainly corrupt).
     num_values: torch.Tensor = tensors_dict["num_values"]  # type: ignore[assignment]
-    num_feature_range: Dict[str, Dict[str, float]] = {}
+    num_feature_range: dict[str, dict[str, float]] = {}
     if num_values.numel() > 0:
         col_min = num_values.min(dim=0).values
         col_max = num_values.max(dim=0).values
@@ -321,7 +322,7 @@ def tokenization_summary(
 # ---------------------------------------------------------------------------
 
 
-def encode_pay_value(pay_value: int) -> Tuple[int, float]:
+def encode_pay_value(pay_value: int) -> tuple[int, float]:
     """Encode a single PAY value into ``(state_id, severity)``.
 
     Mapping:
@@ -352,7 +353,7 @@ def encode_pay_value(pay_value: int) -> Tuple[int, float]:
 
 def _encode_pay_vectorised(
     pay_raw: np.ndarray,
-) -> Tuple[np.ndarray, np.ndarray]:
+) -> tuple[np.ndarray, np.ndarray]:
     """Vectorised PAY encode: ``(N, 6) int -> (state_ids int64, severities f32)``.
 
     Raises ``PAYValueError`` with the offending ``(row, month)`` so the
@@ -390,15 +391,15 @@ def _encode_pay_vectorised(
 
 def tokenize_row(
     row: pd.Series,
-    cat_vocab: Dict[str, Dict[int, int]],
-) -> Tuple[Dict[str, int], List[int], List[float], List[float], int]:
+    cat_vocab: dict[str, dict[int, int]],
+) -> tuple[dict[str, int], list[int], list[float], list[float], int]:
     """Tokenise one row. Reference implementation — production code should
     use the vectorised ``tokenize_dataframe`` path in ``CreditDefaultDataset``.
 
     Kept because it's ~50x slower than the vectorised path at n=30k but
     clearer to read in tests and ablation scripts.
     """
-    cat_indices: Dict[str, int] = {}
+    cat_indices: dict[str, int] = {}
     for feature in CATEGORICAL_FEATURES:
         raw_value = int(row[feature])
         try:
@@ -409,8 +410,8 @@ def tokenize_row(
                 f"known values = {sorted(cat_vocab[feature].keys())}"
             ) from exc
 
-    pay_state_ids: List[int] = []
-    pay_severities: List[float] = []
+    pay_state_ids: list[int] = []
+    pay_severities: list[float] = []
     for feature in PAY_STATUS_FEATURES:
         state_id, severity = encode_pay_value(int(row[feature]))
         pay_state_ids.append(state_id)
@@ -429,8 +430,8 @@ def tokenize_row(
 
 def tokenize_dataframe(
     df: pd.DataFrame,
-    cat_vocab: Dict[str, Dict[int, int]],
-) -> Dict[str, torch.Tensor]:
+    cat_vocab: dict[str, dict[int, int]],
+) -> dict[str, torch.Tensor]:
     """Vectorised tokenisation of a full DataFrame.
 
     Output tensors are what ``CreditDefaultDataset`` slices into — no
@@ -467,7 +468,7 @@ def tokenize_dataframe(
         On any unseen categorical value — the vocab was built on the
         training split and there is no "unknown" bucket by design.
     """
-    cat_indices: Dict[str, torch.Tensor] = {}
+    cat_indices: dict[str, torch.Tensor] = {}
     for feature in CATEGORICAL_FEATURES:
         mapping = cat_vocab[feature]
         # pandas .map silently turns unknowns into NaN. Check explicitly
@@ -543,7 +544,7 @@ class CreditDefaultDataset(Dataset):
     def __init__(
         self,
         df: pd.DataFrame,
-        cat_vocab: Dict[str, Dict[int, int]],
+        cat_vocab: dict[str, dict[int, int]],
         *,
         verbose: bool = True,
     ):
@@ -563,7 +564,7 @@ class CreditDefaultDataset(Dataset):
     def __len__(self) -> int:
         return self._n
 
-    def __getitem__(self, idx: int) -> Dict[str, object]:
+    def __getitem__(self, idx: int) -> dict[str, object]:
         return {
             "cat_indices": {
                 feat: self._tensors["cat_indices"][feat][idx] for feat in CATEGORICAL_FEATURES
@@ -576,7 +577,7 @@ class CreditDefaultDataset(Dataset):
         }
 
     @property
-    def tensors(self) -> Dict[str, torch.Tensor]:
+    def tensors(self) -> dict[str, torch.Tensor]:
         """Escape hatch for callers (MTLMCollator, probing classifiers,
         the reproducibility checker) that want the whole tokenised batch
         without re-iterating through ``__getitem__``."""
@@ -725,8 +726,8 @@ class MTLMCollator:
 
     def __call__(
         self,
-        batch: Sequence[Dict[str, object]] | Dict[str, torch.Tensor],
-    ) -> Dict[str, object]:
+        batch: Sequence[dict[str, object]] | dict[str, torch.Tensor],
+    ) -> dict[str, object]:
         """Take a list of Dataset items (or a pre-assembled batch dict)
         and return the stacked batch augmented with mask metadata."""
         # Accept both to keep the test-harness ergonomic: tests build a
@@ -748,8 +749,8 @@ class MTLMCollator:
 
     @staticmethod
     def _default_collate(
-        batch: Sequence[Dict[str, object]],
-    ) -> Dict[str, torch.Tensor]:
+        batch: Sequence[dict[str, object]],
+    ) -> dict[str, torch.Tensor]:
         """Stack per-item dicts into a single batch, keeping the nested
         ``cat_indices`` layout intact (default PyTorch collation would
         flatten it, which FeatureEmbedding doesn't want)."""

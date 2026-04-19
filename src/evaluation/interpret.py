@@ -31,7 +31,7 @@ import argparse
 import json
 import logging
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Optional
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -48,14 +48,14 @@ logger = logging.getLogger(__name__)
 #: CLS sits at sequence position 0; the 23 feature tokens follow in
 #: TOKEN_ORDER. Tick labels on every heatmap use this list so axis
 #: positions stay human-readable.
-POSITION_LABELS: List[str] = ["[CLS]"] + list(TOKEN_ORDER)
+POSITION_LABELS: list[str] = ["[CLS]"] + list(TOKEN_ORDER)
 SEQ_LEN: int = len(POSITION_LABELS)
 CLS_INDEX: int = 0
 
 #: Per-feature ordering for the importance bar chart. CLS itself is
 #: excluded because "CLS attending to CLS" is not a meaningful feature
 #: importance -- it's a self-loop.
-FEATURE_LABELS: List[str] = list(TOKEN_ORDER)
+FEATURE_LABELS: list[str] = list(TOKEN_ORDER)
 
 DEFAULT_FIG_DPI: int = 150
 
@@ -89,7 +89,7 @@ def load_attention(run_dir: Path) -> np.ndarray:
     return np.stack([data[k] for k in layer_keys], axis=0)
 
 
-def load_predictions(run_dir: Path) -> Dict[str, np.ndarray]:
+def load_predictions(run_dir: Path) -> dict[str, np.ndarray]:
     """Load the per-row predictions npz for class-conditional splits."""
     path = Path(run_dir) / "test_predictions.npz"
     if not path.is_file():
@@ -102,7 +102,7 @@ def load_predictions(run_dir: Path) -> Dict[str, np.ndarray]:
     }
 
 
-def load_rf_gini(csv_path: Path) -> Dict[str, float]:
+def load_rf_gini(csv_path: Path) -> dict[str, float]:
     """Read the RF feature-importance CSV into a {feature: gini} map.
 
     The RF baseline trains on engineered features (RECENT_DELAY,
@@ -170,7 +170,7 @@ def attention_rollout(attn: np.ndarray) -> np.ndarray:
     return rollout
 
 
-def cls_to_feature_scores(rollout: np.ndarray) -> Dict[str, float]:
+def cls_to_feature_scores(rollout: np.ndarray) -> dict[str, float]:
     """Collapse the test-set-average rollout into per-feature importances.
 
     Averages across rows (one test sample each), pulls the CLS row of
@@ -196,7 +196,7 @@ def cls_to_feature_scores(rollout: np.ndarray) -> Dict[str, float]:
 def attention_by_class(
     rollout: np.ndarray,
     y_true: np.ndarray,
-) -> Tuple[np.ndarray, np.ndarray]:
+) -> tuple[np.ndarray, np.ndarray]:
     """Split the rollout by default label and average within each group.
 
     Returned in (defaulter, non-defaulter) order to match the downstream
@@ -268,7 +268,7 @@ def plot_rollout_heatmap(rollout: np.ndarray, out_path: Path) -> None:
     plt.close(fig)
 
 
-def plot_cls_feature_bars(scores: Dict[str, float], out_path: Path) -> None:
+def plot_cls_feature_bars(scores: dict[str, float], out_path: Path) -> None:
     """Horizontal ranked bar chart of CLS -> feature attention."""
     items = sorted(scores.items(), key=lambda kv: kv[1], reverse=True)
     names = [k for k, _ in items]
@@ -359,8 +359,8 @@ def plot_class_conditional(
 
 
 def plot_vs_rf_importance(
-    attn_scores: Dict[str, float],
-    rf_gini: Dict[str, float],
+    attn_scores: dict[str, float],
+    rf_gini: dict[str, float],
     out_path: Path,
 ) -> None:
     """Side-by-side bar chart: transformer attention vs RF Gini.
@@ -445,7 +445,7 @@ def _build_parser() -> argparse.ArgumentParser:
     return p
 
 
-def main(argv: Optional[List[str]] = None) -> int:
+def main(argv: Optional[list[str]] = None) -> int:
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s %(levelname)-8s %(name)s  %(message)s",
@@ -461,7 +461,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     defaulter_mean, nondefaulter_mean = attention_by_class(rollout, preds["y_true"])
     entropy = per_head_entropy(attn)
 
-    rf_gini: Dict[str, float] = {}
+    rf_gini: dict[str, float] = {}
     if args.rf_importance.is_file():
         rf_gini = load_rf_gini(args.rf_importance)
     else:

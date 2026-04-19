@@ -31,7 +31,7 @@ import json
 import logging
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Optional
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -93,7 +93,7 @@ def mc_dropout_predict(
     n_samples: int = 50,
     device: Optional[torch.device] = None,
     seed: int = 0,
-) -> Dict[str, np.ndarray]:
+) -> dict[str, np.ndarray]:
     """Run ``n_samples`` stochastic forward passes through ``loader``.
 
     Parameters
@@ -138,7 +138,7 @@ def mc_dropout_predict(
 
     torch.manual_seed(seed)
 
-    all_probs: List[np.ndarray] = []
+    all_probs: list[np.ndarray] = []
     all_labels: Optional[np.ndarray] = None
 
     for t in range(n_samples):
@@ -146,13 +146,13 @@ def mc_dropout_predict(
         # even under multiprocessing loaders (which may not preserve a
         # single global RNG state across passes).
         torch.manual_seed(seed + t)
-        probs_chunks: List[np.ndarray] = []
-        labels_chunks: List[np.ndarray] = []
+        probs_chunks: list[np.ndarray] = []
+        labels_chunks: list[np.ndarray] = []
         for batch in loader:
             # Move to device manually rather than via a pin_memory /
             # collate hook so this works for any loader the caller
             # hands in, including the plain sequential test loader.
-            moved: Dict[str, Any] = {}
+            moved: dict[str, Any] = {}
             for k, v in batch.items():
                 if isinstance(v, dict):
                     moved[k] = {kk: vv.to(device, non_blocking=True) for kk, vv in v.items()}
@@ -303,7 +303,7 @@ def refuse_curve(
     mean = arrays.mean
     y_pred_all = (mean >= threshold).astype(int)
     N = len(y_true)
-    rows: List[Dict[str, float]] = []
+    rows: list[dict[str, float]] = []
     for frac in fractions:
         n_defer = int(round(N * frac))
         keep = np.ones(N, dtype=bool)
@@ -421,7 +421,7 @@ def _load_model_from_run(run_dir: Path, trust_source: bool = False) -> TabularTr
     import json as _json
 
     meta_path = run_dir / "best.pt.meta.json"
-    cat_vocab_sizes: Optional[Dict[str, int]] = None
+    cat_vocab_sizes: Optional[dict[str, int]] = None
     if meta_path.is_file():
         meta = _json.loads(meta_path.read_text())
         cat_vocab_sizes = meta.get("cat_vocab_sizes") if isinstance(meta, dict) else None
@@ -477,7 +477,7 @@ def _build_parser() -> argparse.ArgumentParser:
     return p
 
 
-def main(argv: Optional[List[str]] = None) -> int:
+def main(argv: Optional[list[str]] = None) -> int:
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s %(levelname)-8s %(name)s  %(message)s",

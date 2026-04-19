@@ -24,11 +24,10 @@ Writes the following under ``output_dir`` (default ``data/processed/``):
 * ``validation_report.json``                                          — QA trace
 """
 
-import os
 import json
+import os
 import warnings
-from pathlib import Path
-from typing import Dict, List, Tuple, Optional
+from typing import Optional
 
 import numpy as np
 import pandas as pd
@@ -218,7 +217,7 @@ def clean_categoricals(df: pd.DataFrame, verbose: bool = True) -> pd.DataFrame:
     return df
 
 
-def validate_data(df: pd.DataFrame) -> Dict:
+def validate_data(df: pd.DataFrame) -> dict:
     """Quality-check the frame and return a structured report.
 
     Returns a dict (not raises) so the caller decides how to react — the
@@ -403,7 +402,7 @@ def split_data(
     test_size: float = 0.15,
     val_size: float = 0.15,
     seed: int = RANDOM_SEED,
-) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     """Stratified 70/15/15 train/val/test split on ``DEFAULT``.
 
     Test is carved off first and then held untouched — it never informs
@@ -456,8 +455,8 @@ def split_data(
 
 def fit_scalers(
     train_df: pd.DataFrame,
-    numerical_cols: List[str],
-) -> Dict[str, StandardScaler]:
+    numerical_cols: list[str],
+) -> dict[str, StandardScaler]:
     """Fit a per-column ``StandardScaler`` on the training split only.
 
     One scaler per column rather than one multi-column scaler, so callers
@@ -476,7 +475,7 @@ def fit_scalers(
 
 def apply_scalers(
     df: pd.DataFrame,
-    scalers: Dict[str, StandardScaler],
+    scalers: dict[str, StandardScaler],
 ) -> pd.DataFrame:
     """Apply pre-fitted scalers; columns not in ``scalers`` pass through."""
     df = df.copy()
@@ -491,7 +490,7 @@ def apply_scalers(
 # ---------------------------------------------------------------------------
 
 
-def compute_feature_metadata(train_df: pd.DataFrame) -> Dict:
+def compute_feature_metadata(train_df: pd.DataFrame) -> dict:
     """Build the tokeniser-ready metadata JSON.
 
     Produces the contract FeatureEmbedding consumes on instantiation:
@@ -546,7 +545,7 @@ def run_preprocessing_pipeline(
     *,
     mode: str = "auto",
     allow_fallback: bool = True,
-) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, Dict, Dict]:
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, dict, dict]:
     """End-to-end pipeline: load -> normalise -> clean -> split -> scale -> write.
 
     Returns ``(train_scaled, val_scaled, test_scaled, metadata, validation_report)``

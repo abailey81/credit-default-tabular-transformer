@@ -44,7 +44,7 @@ import subprocess
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Optional
 
 import numpy as np
 import pandas as pd
@@ -82,14 +82,14 @@ class Check:
     name: str
     passed: bool
     detail: str = ""
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
 class Report:
     """Aggregated result across every ``Check``."""
 
-    checks: List[Check] = field(default_factory=list)
+    checks: list[Check] = field(default_factory=list)
 
     def add(self, check: Check) -> None:
         self.checks.append(check)
@@ -98,7 +98,7 @@ class Report:
     def all_passed(self) -> bool:
         return all(c.passed for c in self.checks)
 
-    def as_dict(self) -> Dict[str, Any]:
+    def as_dict(self) -> dict[str, Any]:
         """JSON-ready view of the report. Used to persist to disk."""
         return {
             "all_passed": self.all_passed,
@@ -118,7 +118,7 @@ def _sha256(path: Path) -> str:
     return h.hexdigest()
 
 
-def _run(cmd: List[str], cwd: Path) -> Tuple[int, str, str]:
+def _run(cmd: list[str], cwd: Path) -> tuple[int, str, str]:
     """Subprocess wrapper returning ``(rc, stdout, stderr)``."""
     proc = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True)
     return proc.returncode, proc.stdout, proc.stderr
@@ -129,7 +129,7 @@ def _compare_dataframes(
     b: pd.DataFrame,
     *,
     rtol: float = 1e-4,
-) -> Tuple[bool, str]:
+) -> tuple[bool, str]:
     """Tolerant dataframe equality. Numeric columns compared with
     ``np.allclose``; non-numeric (which in the comparison table is
     things like ``"0.7797 ± 0.0023"``) fall back to string equality."""
@@ -197,8 +197,8 @@ def check_transformer_run_files(repo: Path) -> Check:
         "test_metrics.json",
         "test_predictions.npz",
     ]
-    missing: List[str] = []
-    checked_runs: List[str] = []
+    missing: list[str] = []
+    checked_runs: list[str] = []
     for run in sorted(run_root.glob("seed_*")):
         if not run.is_dir():
             continue
@@ -337,7 +337,7 @@ def check_split_hashes_match(repo: Path) -> Check:
             detail=f"missing {hashes_md.relative_to(repo)}",
         )
 
-    expected: Dict[str, str] = {}
+    expected: dict[str, str] = {}
     # Markdown format: "| `filename.csv` | `sha256...` | ..."
     hash_re = re.compile(r"\|\s*`([^`]+)`\s*\|\s*`([0-9a-f]{64})`\s*\|")
     for line in hashes_md.read_text().splitlines():
@@ -354,8 +354,8 @@ def check_split_hashes_match(repo: Path) -> Check:
     processed_root = repo / "data" / "processed"
     probe_dirs = (processed_root / "splits", processed_root)
 
-    mismatches: List[str] = []
-    checked: List[str] = []
+    mismatches: list[str] = []
+    checked: list[str] = []
     for name, want in expected.items():
         path: Optional[Path] = None
         for d in probe_dirs:
@@ -452,7 +452,7 @@ def _build_parser() -> argparse.ArgumentParser:
     return p
 
 
-def main(argv: Optional[List[str]] = None) -> int:
+def main(argv: Optional[list[str]] = None) -> int:
     """Run every check, write the JSON report, print the table, return
     exit code (0 on all-pass, 1 on any failure)."""
     logging.basicConfig(

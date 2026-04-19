@@ -10,7 +10,6 @@ ordering, and the --only / --skip-* / --force gating.
 from __future__ import annotations
 
 import io
-import os
 import subprocess
 import sys
 from pathlib import Path
