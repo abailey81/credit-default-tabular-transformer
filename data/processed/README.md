@@ -1,59 +1,47 @@
-# `data/processed/` — preprocessed artefacts
+# data/processed/
 
-Everything downstream of `scripts/run_pipeline.py --preprocess-only` lives
-here. The three artefact families below are the hard contract every model,
-evaluator, and test consumes.
+> **Breadcrumb**: [↑ repo root](../../) > [↑ data](../) > **processed/**
 
-## Layout
+**Preprocessed artefacts** — the hard contract every model, evaluator, and test consumes. Feeds Section 2 (Data), Section 3 (Model), Section 4 (Experiments), and Appendix 8 (Reproducibility).
 
-```
-processed/
-├── SPLIT_HASHES.md           # hash ledger (tracked)
-├── feature_metadata.json     # tokeniser / categorical stats (tracked)
-├── validation_report.json    # data-quality summary (tracked)
-└── splits/                   # see splits/README.md
-    ├── {train,val,test}_raw.csv
-    ├── {train,val,test}_scaled.csv
-    └── {train,val,test}_engineered.csv
-```
+Everything downstream of `scripts/run_pipeline.py --preprocess-only` lives here. The CSVs under `splits/` are git-ignored (large, deterministic-given-seed, regenerable); the three files at this directory root are tracked so reviewers can verify provenance without rerunning the pipeline. A clean rebuild is deterministic — committed hashes must match byte-for-byte or `python -m src.infra.repro` fails.
 
-The CSVs are git-ignored (large, deterministic-given-seed, regenerable);
-the three files at this directory root are tracked.
+## What's here
 
-## Artefact families
+| File / Subfolder | Contents |
+|---|---|
+| [`SPLIT_HASHES.md`](SPLIT_HASHES.md) | SHA-256 ledger pinning every split CSV + `feature_metadata.json`. |
+| [`feature_metadata.json`](feature_metadata.json) | Per-feature descriptors: numerical stats (mean/std/q25/q75/...) + categorical `value_to_index` maps. Tokenizer + embedding + RF all consume this. |
+| [`validation_report.json`](validation_report.json) | Data-quality summary: row count, target balance, per-column null / out-of-range counts, fetch timestamp, source URL. |
+| [`splits/`](splits/) | Nine CSVs (three stages × three splits). |
 
-### 1. Metadata — `feature_metadata.json`
+## How it was produced
 
-Per-feature descriptors the transformer tokeniser and the RF baseline
-consume. The schema has two blocks:
-
-- `numerical_features` — for each column: `mean`, `std`, `min`, `max`,
-  `median`, `q25`, `q75`, scaler parameters. Used by the tokeniser to
-  z-score new batches and by EDA for distribution checks.
-- `categorical_features` — for each column: `n_categories`,
-  `values` list, `value_to_index` map. Used to build the embedding tables
-  (`src/tokenization/tokenizer.py::build_categorical_vocab`).
-
-### 2. Data-quality — `validation_report.json`
-
-Machine-readable record of the validation sweep `run_preprocessing_pipeline`
-performs before it writes any split: row count, target balance,
-per-column null / out-of-range counts, and the fetch timestamp + source
-URL. A mismatch here against the expected schema blocks the pipeline.
-
-### 3. Splits — `splits/`
-
-The nine CSVs (three stages × three splits). See `splits/README.md` for
-the split methodology and which module consumes which stage.
-
-## Regenerating
+[`src/data/preprocessing.py`](../../src/data/preprocessing.py) (`run_preprocessing_pipeline`). Deterministic — regenerates bit-stably via `python -m src.infra.repro`.
 
 ```bash
-python scripts/run_pipeline.py --preprocess-only --source auto
-python -m src.infra.repro          # verifies hashes match SPLIT_HASHES.md
+poetry run python scripts/run_pipeline.py --preprocess-only --source auto
 ```
 
-A clean rebuild is deterministic — the committed hashes should match to
-the byte. If they don't, something upstream drifted (scikit-learn RNG,
-raw data, preprocessing logic); `docs/REPRODUCIBILITY.md` is the
-runbook.
+## How it's consumed
+
+- [`src/tokenization/tokenizer.py`](../../src/tokenization/tokenizer.py) reads `feature_metadata.json` to build the categorical vocabulary.
+- [`src/training/train.py`](../../src/training/train.py) + [`src/training/train_mtlm.py`](../../src/training/train_mtlm.py) load `splits/*_scaled.csv`.
+- [`src/baselines/random_forest.py`](../../src/baselines/random_forest.py) loads `splits/*_engineered.csv`.
+- [`src/evaluation/fairness.py`](../../src/evaluation/fairness.py) reads `splits/test_raw.csv` for protected attributes.
+- [`src/infra/repro.py`](../../src/infra/repro.py) verifies hashes against `SPLIT_HASHES.md`.
+
+## How to regenerate
+
+```bash
+poetry run python scripts/run_pipeline.py --preprocess-only --source auto
+poetry run python -m src.infra.repro  # verifies SPLIT_HASHES.md
+```
+
+If the hashes drift something upstream changed (scikit-learn RNG, raw data, preprocessing logic); [`docs/REPRODUCIBILITY.md`](../../docs/REPRODUCIBILITY.md) is the runbook.
+
+## Neighbours
+
+- **↑ Parent**: [`../`](../) — data/ root
+- **↔ Siblings**: [`../raw/`](../raw/)
+- **↓ Children**: [`splits/`](splits/)

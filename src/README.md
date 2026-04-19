@@ -1,5 +1,7 @@
 # `src/` — Source Packages
 
+Each subpackage has its own `README.md` — click into the folder for details.
+
 This directory holds every first-party module of the credit-card default
 prediction pipeline, organised bottom-up so that data layers never
 depend on modelling layers and modelling layers never depend on
@@ -11,14 +13,14 @@ routes through to stay drift-safe.
 
 ```
 src/
-├── data/            # UCI loader + preprocessing + split + scaling
-├── analysis/        # EDA figures and statistical tests (Section 4)
-├── tokenization/    # Hybrid tokenizer + FeatureEmbedding (Section 6 / Novelty N1)
-├── models/          # Attention / Transformer / TabularTransformer / MTLM (Section 6)
-├── training/        # Losses, dataset sampler, supervised + MTLM training loops (Section 8)
-├── baselines/       # Random Forest benchmark + per-row prediction refit (Section 9)
+├── data/            # UCI loader + preprocessing + split + scaling (Section 2)
+├── analysis/        # EDA figures and statistical tests (Section 2)
+├── tokenization/    # Hybrid tokenizer + FeatureEmbedding (Section 3 / Novelty N1)
+├── models/          # Attention / Transformer / TabularTransformer / MTLM (Section 3)
+├── training/        # Losses, dataset sampler, supervised + MTLM training loops (Section 3)
+├── baselines/       # Random Forest benchmark + per-row prediction refit (Section 4)
 ├── evaluation/      # calibration / fairness / uncertainty / significance / interpret / visualise (Section 4 + Appendix)
-└── infra/           # Reproducibility gate (regenerate-and-diff)
+└── infra/           # Reproducibility gate (regenerate-and-diff) (Appendix)
 ```
 
 ## Import-direction invariant (what depends on what)
@@ -58,9 +60,16 @@ is covered by `tests/models/`. See `tests/README.md` for layout details.
 
 ## Report sections
 
-- Section 3 (Data)       — `src/data/`, `src/analysis/`
-- Section 4 (EDA)        — `src/analysis/`, `src/evaluation/visualise.py`
-- Section 6 (Model)      — `src/tokenization/`, `src/models/`
-- Section 8 (Training)   — `src/training/`
-- Section 9 (Baseline)   — `src/baselines/`
-- Appendix (Audit)       — `src/evaluation/`, `src/infra/`
+The coursework report has 8 sections total (1-Intro, 2-Data Exploration,
+3-Model Build-up, 4-Experiments/Results, 5-Conclusions,
+6-Acknowledgements, 7-References, 8-Appendices). Code maps to them as:
+
+| Report section                    | Code location                                              |
+|-----------------------------------|------------------------------------------------------------|
+| Section 2 — Data Exploration      | `src/data/`, `src/analysis/`                               |
+| Section 3 — Model Build-up (40%)  | `src/tokenization/`, `src/models/`, `src/training/`        |
+| Section 4 — Experiments & Results (30%) | `src/baselines/`, `src/evaluation/`                  |
+| Appendix                          | `src/infra/`                                               |
+
+Section 3 covers PDF requirements i–vi (tokenisation, embedding,
+attention, encoder stack, training loop, regularisation).

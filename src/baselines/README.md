@@ -1,49 +1,49 @@
-# `src/baselines/` — Random Forest benchmark
+# src/baselines/
 
-Implements the Plan §9 Random Forest benchmark that the transformer is
-compared against in Section 10. Keeps training and per-row prediction
-emission in separate modules so significance / calibration / fairness
-consumers can refit without rerunning the 200-iteration search.
+> **Breadcrumb**: [↑ repo root](../../) > [↑ src](../) > **baselines/**
 
-## Key modules
+**Random Forest benchmark** — implements the RF benchmark the transformer is compared against in Section 4 (Experiments) of the report. Keeps training and per-row prediction emission in separate modules so calibration / significance / fairness consumers can refit without rerunning the 200-iteration search.
 
-| Module              | Purpose |
+Reads the engineered CSV (`train_engineered.csv`) from [`../../data/processed/splits/`](../../data/processed/splits/), not the scaled CSV — the transformer and RF consume different feature views deliberately (tree models do not need scaled features). Writes `rf_config.json` that `rf_predictions.py` refits from, so the two modules are tightly coupled by the JSON schema.
+
+## What's here
+
+| File | Contents |
 |---|---|
-| `random_forest.py`  | Hyperparameter-tuned RF benchmark (Plan §9): 200-iter randomised search across a 7-dimensional grid, class-balanced, stratified 5-fold inner CV. Persists `rf_config.json` + cross-validation diagnostics under `results/baseline/rf/`. |
-| `rf_predictions.py` | Refits the tuned RF from `rf_config.json` and emits deterministic per-row probabilities + metrics for the calibration, significance, and fairness consumers. |
+| [`random_forest.py`](random_forest.py) | Hyperparameter-tuned RF benchmark: 200-iter randomised search across a 7-dimensional grid, class-balanced, stratified 5-fold inner CV. Persists `rf_config.json` + CV diagnostics under `results/baseline/`. |
+| [`rf_predictions.py`](rf_predictions.py) | Refits the tuned RF from `rf_config.json` and emits deterministic per-row probabilities + metrics. |
+| [`__init__.py`](__init__.py) | Package marker. |
 
-## Non-obvious dependencies
+## How it was produced
 
-Reads the engineered CSV (`train_engineered.csv`) from
-`data/processed/splits/`, not the scaled CSV — the transformer and RF
-consume different feature views deliberately (tree models do not need
-scaled features). Writes `rf_config.json` that `rf_predictions.py`
-refits from, so the two modules are tightly coupled by the JSON
-schema.
-
-## Invocation
+Hand-written; deterministic under fixed seed. Refit tolerance `max|Δp| < 1e-6` pinned by `src.infra.repro`.
 
 ```bash
 # Tune + fit (slow; ~10 min on a laptop):
-python -m src.baselines.random_forest --output-dir results/baseline/rf
+python -m src.baselines.random_forest --output-dir results/baseline/
 
 # Refit from a saved config + emit per-row probabilities (fast):
 python -m src.baselines.rf_predictions \
-    --config results/baseline/rf/rf_config.json \
+    --config results/baseline/rf_config.json \
     --output-dir results/baseline/rf
 ```
 
-## Tests
+## How it's consumed
 
-- `tests/baselines/test_rf_predictions.py` — JSON round-trip,
-  deterministic refit, per-row shape + bound invariants. A slower
-  committed-data e2e test is gated on `rf_config.json` being present.
+- [`../../results/baseline/`](../../results/baseline/) — RF config, CV log, feature importances, metrics.
+- [`../../results/baseline/rf/`](../../results/baseline/rf/) — per-row predictions.
+- [`../evaluation/`](../evaluation/) — consumes `rf/test_predictions.npz` for head-to-head comparison, calibration, and significance tests.
+- Report **Section 3** (RF hyperparameters, feature-importance figure), **Section 4** (head-to-head comparison). Appendix 8 — `rf_predictions_regenerate` check in `src.infra.repro`.
 
-## Report section
+## How to regenerate
 
-- Section 9 (Random Forest baseline) — every hyperparameter table and
-  feature-importance figure references `random_forest.py`.
-- Section 10 (Comparison) consumes per-row predictions from
-  `rf_predictions.py`.
-- Appendix (Reproducibility) — `rf_predictions_regenerate` check in
-  `src.infra.repro` pins `max|Δp| < 1e-6` against the committed copy.
+```bash
+python -m src.baselines.random_forest
+python -m src.baselines.rf_predictions
+```
+
+## Neighbours
+
+- **↑ Parent**: [`../`](../) — src/ index
+- **↔ Siblings**: [`../data/`](../data/), [`../analysis/`](../analysis/), [`../tokenization/`](../tokenization/), [`../models/`](../models/), [`../training/`](../training/), [`../evaluation/`](../evaluation/), [`../infra/`](../infra/)
+- **↓ Children**: none

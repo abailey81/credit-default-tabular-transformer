@@ -1,44 +1,45 @@
-# `src/analysis/` — Exploratory Data Analysis
+# src/analysis/
 
-Produces the publication-quality EDA figures and statistical tests that
-back Section 4 of the report. Reads only the committed
-`data/processed/splits/train_*.csv` CSVs — never touches raw data.
+> **Breadcrumb**: [↑ repo root](../../) > [↑ src](../) > **analysis/**
 
-## Key modules
+**Exploratory Data Analysis** — produces publication-quality EDA figures and statistical tests that back Section 2 (Data Exploration) of the report. Reads only the committed CSVs under [`../../data/processed/splits/`](../../data/processed/splits/) — never touches raw data.
 
-| Module   | Purpose |
+Pure data-science module: no model code, no tokenizer dependency. Uses `feature_metadata.json` (produced by `src.data.preprocessing`) to keep categorical labels aligned with tokenizer vocabularies. Writes 12 figures to [`../../figures/eda/`](../../figures/eda/) and the summary statistics table to [`../../results/analysis/`](../../results/analysis/).
+
+## What's here
+
+| File | Contents |
 |---|---|
-| `eda.py` | Emits 12 EDA figures under `figures/eda/`: class balance, numerical / categorical distributions with KS / chi-square / Cramér-V tests, PAY-sequence heatmaps, and correlation matrices. Self-contained CLI; all figures are deterministic given a seed. |
+| [`eda.py`](eda.py) | Self-contained CLI. Emits `fig01..fig13` under `figures/eda/` (no fig12 — dropped in Phase 3) covering class balance, numerical / categorical distributions with KS / chi-square / Cramér-V tests, PAY-sequence heatmaps, correlation matrices. Also writes `results/analysis/summary_statistics.{csv,tex}`. |
+| [`__init__.py`](__init__.py) | Package marker. |
 
-## Non-obvious dependencies
+## How it was produced
 
-Uses `feature_metadata.json` produced by `src.data.preprocessing` to
-keep categorical labels aligned with the tokenizer vocabularies. It
-does NOT depend on `src.tokenization` or any model code — this is a
-pure data-science module.
-
-## Invocation
+Hand-written module; deterministic given a seed — regenerates bit-stably via `python -m src.infra.repro`.
 
 ```bash
 python -m src.analysis.eda --data-dir data/processed --fig-dir figures/eda
-```
-
-Also runnable via Stage 2 of the end-to-end pipeline:
-
-```bash
+# Or via the Stage-2 driver:
 python scripts/run_all.py --only eda
 ```
 
-## Tests
+## How it's consumed
 
-No dedicated unit tests yet (figures are visually inspected during
-review); smoke-level coverage comes from the `scripts/run_all.py` test
-in `tests/scripts/test_run_all.py` which exercises the CLI dispatch.
+- Report **Section 2** (all 12 figures + Table 1).
+- [`../../figures/eda/`](../../figures/eda/) — rendered PNGs.
+- [`../../results/analysis/`](../../results/analysis/) — summary stats CSV + LaTeX.
+- [`../../notebooks/01_exploratory_data_analysis.ipynb`](../../notebooks/01_exploratory_data_analysis.ipynb) mirrors this module cell-by-cell.
 
-## Report section
+## How to regenerate
 
-- Section 4 (Exploratory Data Analysis) — every figure in that section
-  is produced by `eda.py`.
-- The notebook `notebooks/01_exploratory_data_analysis.ipynb` mirrors
-  this module for reviewers who want to step through the analysis
-  cell-by-cell.
+```bash
+python -m src.analysis.eda
+```
+
+No dedicated unit tests (figures are visually inspected); smoke-level coverage via `tests/scripts/test_run_all.py` CLI dispatch.
+
+## Neighbours
+
+- **↑ Parent**: [`../`](../) — src/ index
+- **↔ Siblings**: [`../data/`](../data/), [`../tokenization/`](../tokenization/), [`../models/`](../models/), [`../training/`](../training/), [`../baselines/`](../baselines/), [`../evaluation/`](../evaluation/), [`../infra/`](../infra/)
+- **↓ Children**: none

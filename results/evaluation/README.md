@@ -1,41 +1,42 @@
 # results/evaluation/
 
-All downstream evaluation artefacts for the Transformer runs in
-[`../transformer/`](../transformer/) plus the RF baseline in
-[`../baseline/rf/`](../baseline/rf/).
+> **Breadcrumb**: [↑ repo root](../../) > [↑ results](../) > **evaluation/**
 
-## Subfolders
+**Downstream evaluation artefacts** — for the Transformer runs in [`../transformer/`](../transformer/) plus the RF baseline in [`../baseline/rf/`](../baseline/rf/). Consumed by Section 4 (Experiments) and Appendix 8 (interpretability) of the report.
 
-| Folder | Contents | Produced by | Novelty |
-|---|---|---|---|
-| [`comparison/`](comparison/) | `comparison_table.{csv,md}`, `evaluate_summary.json`, `head_to_head_summary.txt`. | [`src/evaluation/evaluate.py`](../../src/evaluation/evaluate.py) | — |
-| [`calibration/`](calibration/) | `calibration_metrics.csv`, `calibration_summary.json`. | [`src/evaluation/calibration.py`](../../src/evaluation/calibration.py) | — |
-| [`fairness/`](fairness/) | `subgroup_metrics.csv`, `disparity_metrics.csv`, `fairness_summary.json`. | [`src/evaluation/fairness.py`](../../src/evaluation/fairness.py) | **N10** |
-| [`uncertainty/`](uncertainty/) | `mc_dropout.npz`, `refuse_curve.csv`, `uncertainty_summary.json`. | [`src/evaluation/uncertainty.py`](../../src/evaluation/uncertainty.py) | **N11** |
-| [`significance/`](significance/) | `pairwise_tests.csv`, `power_analysis.csv`. | [`src/evaluation/significance.py`](../../src/evaluation/significance.py) | **N12** |
+Five subfolders mirror Section 4's subsections (one per `src/evaluation/*.py` module) plus a loose `interpret.json` at the root. That one layout inconsistency — interpretability's numeric summary lives here rather than in an `interpret/` subfolder, while its PNGs live under `figures/evaluation/interpret/` — is intentional (too many existing cross-references to move) but flagged so browsers aren't surprised.
 
-## Loose file
+## What's here
 
-| File | Shows | Produced by |
-|---|---|---|
-| `interpret.json` | Attention-interpretability numeric summary (CLS feature importances, rollout stats, RF-vs-attn correlation). | [`src/evaluation/interpret.py`](../../src/evaluation/interpret.py) |
+| File / Subfolder | Contents |
+|---|---|
+| [`comparison/`](comparison/) | `comparison_table.{csv,md}`, `evaluate_summary.json`, `head_to_head_summary.txt`. |
+| [`calibration/`](calibration/) | `calibration_metrics.csv`, `calibration_summary.json`. |
+| [`fairness/`](fairness/) | `subgroup_metrics.csv`, `disparity_metrics.csv`, `fairness_summary.json` (**N10**). |
+| [`uncertainty/`](uncertainty/) | `mc_dropout.npz`, `refuse_curve.csv`, `uncertainty_summary.json` (**N11**). |
+| [`significance/`](significance/) | `pairwise_tests.csv`, `power_analysis.csv` (**N12**). |
+| [`interpret.json`](interpret.json) | Attention-interpretability numeric summary (CLS feature importances, rollout stats, RF-vs-attn correlation). |
 
-**Note the layout inconsistency**: `interpret.json` lives at the
-`results/evaluation/` root rather than in an `interpret/` subfolder, while
-its PNGs live under `figures/evaluation/interpret/`. This is intentional —
-too many existing cross-references to move it — but flagged here so browsers
-aren't surprised.
+## How it was produced
 
-## Consumed by
+Each subfolder is written by the corresponding `src/evaluation/*.py` module — see each child README. `interpret.json` comes from [`src/evaluation/interpret.py`](../../src/evaluation/interpret.py).
 
-- Report **Section 4** (all subfolders) + Appendix interpretability.
-- `docs/MODEL_CARD.md` pulls calibration + fairness numbers.
+Deterministic where seeded — the uncertainty NPZ and significance bootstrap are stochastic, seeded; everything regenerates bit-stably via `python -m src.infra.repro`.
 
-## Regenerate
+## How it's consumed
+
+- [`../../figures/evaluation/`](../../figures/evaluation/) — plots rendered from these CSVs / JSONs / NPZs.
+- Report **Section 4** (all subfolders) + **Appendix 8** (interpretability).
+- [`docs/MODEL_CARD.md`](../../docs/MODEL_CARD.md) pulls calibration + fairness numbers.
+
+## How to regenerate
 
 ```bash
 poetry run python -m src.infra.repro
 ```
 
-Deterministic where seeded (uncertainty + significance use fixed seeds);
-regenerates bit-stably.
+## Neighbours
+
+- **↑ Parent**: [`../`](../) — results/ index
+- **↔ Siblings**: [`../analysis/`](../analysis/), [`../baseline/`](../baseline/), [`../transformer/`](../transformer/), [`../mtlm/`](../mtlm/), [`../repro/`](../repro/), [`../pipeline/`](../pipeline/)
+- **↓ Children**: [`comparison/`](comparison/), [`calibration/`](calibration/), [`fairness/`](fairness/), [`uncertainty/`](uncertainty/), [`significance/`](significance/)

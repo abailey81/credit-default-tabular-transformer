@@ -1,32 +1,38 @@
-# `tests/scripts/` — End-to-end orchestrator tests
+# tests/scripts/
 
-Covers `scripts/run_all.py` — the one-command Option A driver. The
-goal is CLI plumbing coverage (argument parsing, stage ordering,
-`--only` / `--skip-*` / `--force` gating, log-file creation) without
-paying the cost of any real pipeline stage.
+> **Breadcrumb**: [↑ repo root](../../) > [↑ tests](../) > **scripts/**
 
-## What's covered
+**End-to-end orchestrator tests** — covers [`scripts/run_all.py`](../../scripts/run_all.py), the one-command Option A driver. Goal is CLI plumbing coverage (argument parsing, stage ordering, `--only` / `--skip-*` / `--force` gating, log-file creation) without paying the cost of any real pipeline stage. Gated by Appendix 8 (Reproducibility) of the report.
 
-| File                 | Subject |
+All subprocess invocations are mocked — tests never shell out to the real pipeline. When you add a new pipeline stage to `run_all.py`, also add a dispatch test here — the stage table is the single source of truth and this test is the lock.
+
+## What's here
+
+| File | Contents |
 |---|---|
-| `test_run_all.py`    | Subprocess.Popen is stubbed so every stage sees a zero-exit fake child; the orchestrator walks its state machine in milliseconds. Catches regressions in: `--only eda`, `--only rf`, `--skip-preprocess`, `--skip-eda`, `--force`, log-file rotation, and exit-code propagation. |
+| [`test_run_all.py`](test_run_all.py) | `subprocess.Popen` stubbed so every stage sees a zero-exit fake child; the orchestrator walks its state machine in milliseconds. Catches regressions in `--only eda`, `--only rf`, `--skip-preprocess`, `--skip-eda`, `--force`, log-file rotation, and exit-code propagation. |
 
-## Fixtures used
+## How it was produced
 
-`repo_root` (to resolve `scripts/run_all.py`). All subprocess
-invocations are mocked — tests never shell out to the real pipeline.
-
-## Running
+Hand-written pytest. Uses `repo_root` from `conftest.py` to resolve `scripts/run_all.py`. Tests modify `sys.path` to make `import run_all` work; they do not leak state because each test restores `sys.path` in a finalizer.
 
 ```bash
 python -m pytest tests/scripts/ -q
 ```
 
-## Gotchas
+## How it's consumed
 
-- When you add a new pipeline stage to `run_all.py`, also add a
-  dispatch test here. The stage table is the single source of truth
-  and this test is the lock.
-- Tests modify `sys.path` to make `import run_all` work; they do not
-  leak state into other test files because each test restores
-  `sys.path` in a finalizer.
+- CI runs this subpackage.
+- Pinned by Report **Appendix 8** as part of the 320-test suite.
+
+## How to regenerate
+
+```bash
+python -m pytest tests/scripts/ -q
+```
+
+## Neighbours
+
+- **↑ Parent**: [`../`](../) — tests/ index
+- **↔ Siblings**: [`../data/`](../data/), [`../tokenization/`](../tokenization/), [`../models/`](../models/), [`../training/`](../training/), [`../baselines/`](../baselines/), [`../evaluation/`](../evaluation/), [`../infra/`](../infra/)
+- **↓ Children**: none

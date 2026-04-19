@@ -23,6 +23,17 @@
 
 <br>
 
+## Start here
+
+New to this repo? Pick one:
+
+- **I want to run the pipeline** → [Quick Start](#quick-start) below (one command).
+- **I want to understand the folder layout** → [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) (subpackage map + data flow).
+- **I want the report evidence pack** → [Section 4 evidence pack](#section-4-evidence-pack) below.
+- **I just need headline numbers** → [Headline Results](#headline-results) below.
+
+Every folder has its own `README.md` explaining what's there, who produced it, and how to regenerate it — just click into any subfolder.
+
 ## Overview
 
 This project develops two models for predicting credit card default on the [UCI Credit Card Default dataset](https://archive.ics.uci.edu/dataset/350/default+of+credit+card+clients) (30,000 clients, 23 features):

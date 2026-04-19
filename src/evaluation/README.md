@@ -1,55 +1,53 @@
-# `src/evaluation/` — Metrics, calibration, fairness, significance, interpretability, visualisation
+# src/evaluation/
 
-Consumes the per-seed transformer runs under `results/transformer/`
-and the RF runs under `results/baseline/rf/` to produce every number
-and figure in Sections 4 and 10 of the report, plus the Appendix audit
-artefacts.
+> **Breadcrumb**: [↑ repo root](../../) > [↑ src](../) > **evaluation/**
 
-## Key modules
+**Metrics, calibration, fairness, significance, interpretability, visualisation** — consumes the per-seed transformer runs under [`../../results/transformer/`](../../results/transformer/) and the RF under [`../../results/baseline/rf/`](../../results/baseline/rf/) to produce every number and figure in Section 4 (Experiments) of the report plus Appendix 8 audit artefacts.
 
-| Module            | Purpose |
+All seven modules read committed artefacts — never raw data or raw model code. `calibration.py` is consumed by `fairness.py` and `uncertainty.py` (calibrated probabilities feed their decision-threshold analyses). `evaluate.py` is the central orchestrator: every `train.py` invocation is followed by this module.
+
+## What's here
+
+| File | Contents |
 |---|---|
-| `evaluate.py`     | Aggregates per-seed metrics into a transformer-vs-RF comparison table (ensemble of 4 seeds). Picks up RF from `rf_predictions.py`. |
-| `visualise.py`    | §4 report figures: ROC / PR / confusion matrices / training curves / reliability diagrams. Deterministic; all seeds fixed. |
-| `calibration.py`  | Post-hoc calibration (temperature, Platt, isotonic) + ECE / MCE / Brier decomposition + reliability-bin edges. |
-| `fairness.py`     | Subgroup fairness audit across SEX / EDUCATION / MARRIAGE: AUC / TPR / FPR / selection rate disparity table. |
-| `uncertainty.py`  | MC-dropout predictive entropy + BALD mutual information + refuse curve. |
-| `significance.py` | Paired tests: McNemar (hard labels), DeLong (AUC), bootstrap (any metric), BH-FDR correction, Hanley-McNeil power. |
-| `interpret.py`    | Attention rollout + per-feature importance vs RF Gini. Writes importance CSV + rollout heatmaps. |
+| [`evaluate.py`](evaluate.py) | Aggregates per-seed metrics into the transformer-vs-RF comparison table (ensemble of 4 seeds). Picks up RF from `rf_predictions.py`. |
+| [`visualise.py`](visualise.py) | ROC / PR / confusion matrices / training curves / reliability diagrams. |
+| [`calibration.py`](calibration.py) | Post-hoc calibration (temperature, Platt, isotonic) + ECE / MCE / Brier decomposition. |
+| [`fairness.py`](fairness.py) | Subgroup audit across SEX / EDUCATION / MARRIAGE: AUC / TPR / FPR / selection-rate disparity (**N10**). |
+| [`uncertainty.py`](uncertainty.py) | MC-dropout predictive entropy + BALD mutual information + refuse curve (**N11**). |
+| [`significance.py`](significance.py) | Paired tests: McNemar, DeLong, bootstrap, BH-FDR correction, Hanley-McNeil power (**N12**). |
+| [`interpret.py`](interpret.py) | Attention rollout + per-feature importance vs RF Gini. |
+| [`__init__.py`](__init__.py) | Package marker. |
 
-## Non-obvious dependencies
+## How it was produced
 
-All seven modules read committed artefacts under `results/` — never
-raw data or raw model code. `calibration.py` is consumed by
-`fairness.py` and `uncertainty.py` (calibrated probabilities feed
-their decision-threshold analyses). `evaluate.py` is the central
-orchestrator: pipeline stage "Section 10" runs only this module after
-every `train.py` invocation.
-
-## Invocation
+Hand-written. Deterministic where seeded; stochastic-and-seeded for `uncertainty.py` (MC-dropout) and `significance.py` (bootstrap) — regenerate bit-stably under committed seeds via `python -m src.infra.repro`.
 
 ```bash
-python -m src.evaluation.evaluate     --runs results/transformer --rf-dir results/baseline/rf
-python -m src.evaluation.visualise    --runs results/transformer --rf-dir results/baseline/rf --figures-dir figures
-python -m src.evaluation.calibration  --runs results/transformer
-python -m src.evaluation.fairness     --runs results/transformer/seed_42 --data-dir data/processed
-python -m src.evaluation.uncertainty  --run  results/transformer/seed_42 --n-samples 30
-python -m src.evaluation.significance --runs results/transformer --rf-dir results/baseline/rf
-python -m src.evaluation.interpret    --run  results/transformer/seed_42
+python -m src.evaluation.evaluate
+python -m src.evaluation.visualise
+python -m src.evaluation.calibration
+python -m src.evaluation.fairness
+python -m src.evaluation.uncertainty
+python -m src.evaluation.significance
+python -m src.evaluation.interpret
 ```
 
-## Tests
+## How it's consumed
 
-Each module has a dedicated file under `tests/evaluation/` —
-`test_calibration.py`, `test_fairness.py`, `test_uncertainty.py`,
-`test_significance.py`, `test_interpret.py`, `test_visualise.py`, and
-`test_evaluate_ensemble.py`. Every test has a synthetic unit path and
-an end-to-end path that is gated on committed artefacts being present.
+- [`../../results/evaluation/`](../../results/evaluation/) — numeric outputs.
+- [`../../figures/evaluation/`](../../figures/evaluation/) — rendered plots.
+- [`docs/MODEL_CARD.md`](../../docs/MODEL_CARD.md) pulls calibration + fairness + uncertainty numbers.
+- Report **Section 4** (all subsections) + **Appendix 8** (interpretability, audits).
 
-## Report section
+## How to regenerate
 
-- Section 4 (EDA) — `visualise.py`.
-- Section 10 (Comparison) — `evaluate.py`, `calibration.py`,
-  `significance.py`.
-- Appendix (Fairness / Uncertainty / Interpretability) — the remaining
-  four modules.
+```bash
+python -m src.infra.repro
+```
+
+## Neighbours
+
+- **↑ Parent**: [`../`](../) — src/ index
+- **↔ Siblings**: [`../data/`](../data/), [`../analysis/`](../analysis/), [`../tokenization/`](../tokenization/), [`../models/`](../models/), [`../training/`](../training/), [`../baselines/`](../baselines/), [`../infra/`](../infra/)
+- **↓ Children**: none

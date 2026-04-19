@@ -1,36 +1,46 @@
-# `tests/data/` — Data-subpackage tests
+# tests/data/
 
-Covers (will cover) `src/data/` — the resilient UCI loader and the
-preprocessing / split / scaling pipeline.
+> **Breadcrumb**: [↑ repo root](../../) > [↑ tests](../) > **data/**
 
-## Current state
+**Data-subpackage tests** — covers (will cover) [`src/data/`](../../src/data/), the resilient UCI loader and the preprocessing / split / scaling pipeline. Gated by Appendix 8 (Reproducibility) of the report.
 
-No dedicated unit tests yet. Coverage is transitive:
+No dedicated unit tests yet. Coverage is transitive through two existing tests. This directory exists with a README to document the intended future coverage and the contract that preprocessing already satisfies via the hash ledger.
 
-- `tests/infra/test_repro.py::test_split_hashes_check_passes_on_committed_repo`
-  diffs every byte of the regenerated splits against the committed
-  SHA-256 ledger at `data/processed/SPLIT_HASHES.md`, which pins
-  `src/data/preprocessing.py`'s output.
-- `tests/scripts/test_run_all.py` exercises the Stage-1 dispatch that
-  invokes `src/data/preprocessing.py`.
+## What's here
 
-## Intended future coverage
+No test files yet — only this README.
 
-| Future file         | Would cover |
+Intended future coverage:
+
+| Future file | Would cover |
 |---|---|
-| `test_sources.py`         | `build_default_data_source` API → local fallback ordering, provenance JSON schema. |
-| `test_preprocessing.py`   | Schema normalisation idempotence, stratified split class-balance tolerance, scaling leak-safety, `feature_metadata.json` schema round-trip. |
+| `test_sources.py` | `build_default_data_source` API → local fallback ordering, provenance JSON schema. |
+| `test_preprocessing.py` | Schema normalisation idempotence, stratified-split class-balance tolerance, scaling leak-safety, `feature_metadata.json` schema round-trip. |
 
-## Running
+## How it was produced
 
-Once tests land here they run with:
+Directory scaffolded during the 2026 restructure. Transitive coverage today:
+
+- `tests/infra/test_repro.py::test_split_hashes_check_passes_on_committed_repo` diffs every byte of the regenerated splits against [`data/processed/SPLIT_HASHES.md`](../../data/processed/SPLIT_HASHES.md), pinning `src/data/preprocessing.py` output.
+- `tests/scripts/test_run_all.py` exercises the Stage-1 dispatch that invokes `src/data/preprocessing.py`.
+
+## How it's consumed
+
+- CI runs whatever lands here via `pytest tests/data/ -q`.
+- Report **Appendix 8** will cite these tests once they land.
+
+## How to regenerate
+
+Once tests land here:
 
 ```bash
 python -m pytest tests/data/ -q
 ```
 
-## Gotcha
+Gotcha: do not re-run preprocessing in a test unless you scope to `tmp_path`. The committed splits under `data/processed/splits/` are golden — overwriting them breaks the reproducibility gate.
 
-Do not re-run preprocessing in a test unless you scope to `tmp_path`.
-The committed splits under `data/processed/splits/` are golden —
-overwriting them is how you break the reproducibility gate.
+## Neighbours
+
+- **↑ Parent**: [`../`](../) — tests/ index
+- **↔ Siblings**: [`../tokenization/`](../tokenization/), [`../models/`](../models/), [`../training/`](../training/), [`../baselines/`](../baselines/), [`../evaluation/`](../evaluation/), [`../infra/`](../infra/), [`../scripts/`](../scripts/)
+- **↓ Children**: none

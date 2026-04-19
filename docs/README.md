@@ -1,5 +1,14 @@
 # `docs/` — Project documentation index
 
+## For newcomers
+
+Start at [`ARCHITECTURE.md`](ARCHITECTURE.md) — it is the entry point
+for understanding the pipeline (stages, artefact dependencies,
+subprocess boundaries). Then read the Model Card and Data Sheet if you
+need modelling / dataset context; consult `REPRODUCIBILITY.md` before
+regenerating artefacts; and `coursework_spec.md` is the immutable
+assignment brief.
+
 Human-readable companions to the report. Each file has a narrow scope
 and lives here (rather than in the repo root) so the top-level
 `README.md` stays short.
