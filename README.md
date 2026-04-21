@@ -104,7 +104,7 @@ the order `run_all.py` invokes them:
 2. **Exploratory data analysis** (produces `figures/eda/*.png` + `results/analysis/summary_statistics.{csv,tex}`)
    ```bash
    poetry run python scripts/run_pipeline.py --eda-only
-   # or interactively: notebooks/01_eda.ipynb
+   # or interactively: notebooks/01_exploratory_data_analysis.ipynb
    ```
 3. **Random Forest benchmark**
    ```bash
@@ -375,22 +375,29 @@ credit-default-tabular-transformer/
 │   └── infra/
 │       └── repro.py            # Reproducibility gate (regenerate + diff every artefact)
 │
-├── tests/                      # 316 pytest cases across every module
+├── tests/                      # 318 pytest cases across every module, mirroring src/
 │   ├── conftest.py             # Pytest fixtures + repo-root sys.path bootstrap
-│   ├── test_attention.py  test_calibration.py  test_dataset.py
-│   ├── test_embedding.py  test_evaluate_ensemble.py  test_fairness.py
-│   ├── test_interpret.py  test_losses.py  test_model.py  test_mtlm.py
-│   ├── test_repro.py      test_rf_predictions.py  test_significance.py
-│   ├── test_tokenizer.py  test_train.py  test_train_mtlm.py
-│   ├── test_transformer.py  test_uncertainty.py  test_utils.py
-│   └── test_visualise.py
+│   ├── baselines/test_rf_predictions.py
+│   ├── evaluation/             # test_calibration.py, test_evaluate_ensemble.py,
+│   │                           # test_fairness.py, test_interpret.py,
+│   │                           # test_significance.py, test_uncertainty.py,
+│   │                           # test_visualise.py
+│   ├── infra/test_repro.py
+│   ├── models/                 # test_attention.py, test_model.py,
+│   │                           # test_mtlm.py, test_transformer.py
+│   ├── scripts/test_run_all.py
+│   ├── tokenization/           # test_embedding.py, test_tokenizer.py
+│   └── training/               # test_dataset.py, test_losses.py, test_train.py,
+│                               # test_train_mtlm.py, test_utils.py
 │
 ├── data/
 │   ├── raw/                    # Dataset source (manual fallback .xls is tracked)
 │   │   └── default_of_credit_card_clients.xls   # Offline fallback dataset
-│   └── processed/              # Pipeline outputs (gitignored except metadata + report)
-│       ├── feature_metadata.json    # Category mappings for tokeniser
-│       └── validation_report.json   # Data quality audit
+│   └── processed/              # Pipeline outputs
+│       ├── feature_metadata.json    # Category mappings for tokeniser (tracked)
+│       ├── validation_report.json   # Data quality audit (tracked)
+│       ├── SPLIT_HASHES.md          # SHA-256 ledger for reproducibility (tracked)
+│       └── splits/             # 9 split CSVs (gitignored — regenerate via run_pipeline.py)
 │
 ├── figures/
 │   ├── eda/                    # 12 EDA figures at 300 DPI
@@ -445,6 +452,79 @@ If Poetry is not installed:
 ```bash
 curl -sSL https://install.python-poetry.org | python3 -
 ```
+
+> **Python version note.** The project has been developed against Python
+> 3.10–3.12 (as pinned in `pyproject.toml`) and has also been verified on
+> Python 3.14. On a system with Python ≥ 3.13, Poetry will refuse to
+> install unless you widen the pin locally or fall back to
+> `pip install -e .` inside a venv.
+
+### Expected runtimes
+
+| Entry point | CPU | T4 GPU |
+|:---|:---|:---|
+| `pytest tests/ -q` | ~25 s | ~20 s |
+| `scripts/run_all.py --n-samples 5 --n-resamples 200 --seeds 42` (smoke) | ~5 min | ~2 min |
+| `scripts/run_all.py` (full: 3 seeds + MTLM + evaluation battery) | ~30–60 min | ~10–15 min |
+
+PyTorch auto-detects GPU. Force CPU with `--device cpu` on any `src.training.*` entry point. The one-command `scripts/run_all.py` uses `--device auto` throughout and falls back to CPU cleanly.
+
+### Reproducing on Google Colab (T4 GPU, free tier)
+
+All transformer training can be reproduced on Colab's free T4 runtime.
+Recommended when running on CPU would take 30–60 min per seed.
+
+**Step-by-step:**
+
+1. Go to [colab.research.google.com](https://colab.research.google.com).
+2. `File → Upload notebook` — upload `notebooks/04_train_transformer.ipynb`.
+3. `Runtime → Change runtime type` → **T4 GPU** → Save.
+4. `Runtime → Run all`.
+
+Cell 1 auto-detects Colab, clones the public repo into `/content/`, and
+installs dependencies (takes ~2 min on first run). Cells 3–9 preprocess,
+build, and train a single transformer (seed 42) — ~3 min on T4. Cells
+10–11 re-evaluate and plot a reliability diagram.
+
+**To train all 3 seeds + the MTLM run:** scroll to Cell 12 (`run_seed_sweep`)
+and uncomment the line:
+
+```python
+seed_df = run_seed_sweep([1, 2, 3, 4, 5])
+```
+
+Then re-run that cell. Takes ~15 min for 5 seeds on T4.
+
+**To run ablations:** Cell 13 (`run_ablation_grid`) contains a pre-built
+A5 × A22 grid — uncomment to execute.
+
+**Downloading the results back to your local repo:** add a new cell at the
+end and execute:
+
+```python
+!zip -r /content/results.zip /content/credit-default-tabular-transformer/results/transformer
+from google.colab import files
+files.download('/content/results.zip')
+```
+
+Unzip into your local repo's `results/transformer/` folder. Then run the
+analysis stages locally (no GPU needed):
+
+```bash
+poetry run python -m src.evaluation.evaluate
+poetry run python -m src.evaluation.visualise
+poetry run python -m src.evaluation.interpret
+```
+
+**Alternative — full one-command pipeline on Colab:** after Cell 1 clones
+the repo, open a new code cell and run:
+
+```python
+!cd /content/credit-default-tabular-transformer && python scripts/run_all.py
+```
+
+Takes ~10–15 min end-to-end on T4 (preprocessing + RF + 3 seeds + MTLM +
+every evaluation stage).
 
 ### Installation
 
@@ -526,7 +606,7 @@ checkpoint bundle (`best.pt` + `.weights` + `.meta.json`) under
 ### Tests
 
 ```bash
-# Full pytest suite (316 cases, all pass, ~25 s on CPU)
+# Full pytest suite (318 cases, all pass, ~25 s on CPU)
 poetry run pytest tests/ -q
 
 # Every module with a __main__ smoke block
@@ -546,7 +626,7 @@ poetry run jupyter notebook notebooks/
 
 | Notebook | Description |
 |:---|:---|
-| `01_exploratory_data_analysis.ipynb` | 20+ visualisations, statistical tests (Wilson CI, KS, Mann-Whitney U, Cohen's d, Cramer's V, D'Agostino, VIF, mutual information) |
+| `01_exploratory_data_analysis.ipynb` | 12 figures with statistical tests (Wilson CI, KS, Mann-Whitney U, Cohen's d, Cramer's V, D'Agostino, VIF, mutual information) |
 | `02_data_preprocessing.ipynb` | Cleaning, validation, feature engineering, stratified splitting, scaling, metadata export |
 | `03_random_forest_benchmark.ipynb` | Baseline vs tuned RF, hyperparameter analysis, feature importance (Gini + permutation), threshold optimisation, cross-validation |
 | `04_train_transformer.ipynb` | Transformer training pipeline (Colab / VS Code / local auto-detecting), multi-seed sweep, A5 × A22 ablation grid, training-curve dashboard, reliability diagram, head-to-head vs RF, train/val/test parity, F1-optimal threshold picking, 3-seed + 4-model arithmetic / geometric ensembles. |
