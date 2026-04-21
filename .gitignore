@@ -29,31 +29,9 @@ data/raw/*.xls
 data/raw/*.xlsx
 data/raw/*.csv
 data/processed/*.csv
-data/processed/splits/*.csv
-
-# Manual fallback dataset — *tracked* so the offline loader has something
-# to fall back to when the UCI API is unreachable.
-!data/raw/default_of_credit_card_clients.xls
-!data/raw/default_of_credit_card_clients.xlsx
 
 # ── Jupyter ──
 .ipynb_checkpoints/
-
-# ── Test artefacts ──
-.coverage
-.pytest_cache/
-htmlcov/
-
-# ── Trained-model artefacts (heavy, regeneratable) ──
-# Reproduce via `poetry run python -m src.training.train …` or
-# `python -m src.training.train_mtlm …` using the config.json saved
-# alongside each run. The smaller JSON / CSV diagnostic files
-# (config.json, train_log.csv, test_metrics.json, test_predictions.npz)
-# stay in git so the head-to-head numbers and ensemble script can be
-# audited without re-running.
-*.pt
-*.pt.weights
-results/transformer/**/test_attn_weights.npz
 
 # ── Claude Code ──
 .claude/
@@ -63,9 +41,3 @@ results/transformer/**/test_attn_weights.npz
 *.pdf
 .env
 CLAUDE.md
-
-# Coursework specification — *tracked* so the repo self-documents its
-# requirements without needing the separate VLE download.
-!finance_and_ai_cw___group_project-2.pdf
-cli commands.txt
-results/repro/_scratch/

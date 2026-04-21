@@ -1,3 +1,0 @@
-split,threshold,accuracy,precision,recall,f1,auc_roc,avg_precision,inference_time_s,model,train_time_s
-test_baseline,0.5,0.8147,0.643,0.3638,0.4647,0.7654,0.5389,0.028,RF_baseline,0.67
-test,0.5,0.822,0.694,0.3487,0.4642,0.7845,0.5673,0.061,RF_tuned,
