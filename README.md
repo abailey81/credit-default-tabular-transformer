@@ -160,7 +160,7 @@ set `PYTHONIOENCODING=utf-8` in the shell so stage modules can emit unicode logs
 |:---:|:---|:---:|:---|
 | **0** | Resilient Data Ingestion | `DONE` | Layered, provenance-aware loader: UCI ML Repository API with bounded retries, automatic fallback to a tracked offline `.xls`, every consumer routes through it. |
 | **1** | Exploratory Data Analysis | `DONE` | 12 figures with statistical tests. Temporal divergence, PAY semantics, feature importance, multicollinearity, outlier and normality diagnostics. |
-| **2** | Data Preprocessing | `DONE` | Schema normalisation, categorical cleaning, 22 engineered features, stratified 70/15/15 split, leak-free scaling, tokeniser metadata export. |
+| **2** | Data Preprocessing | `DONE` | Schema normalisation, categorical cleaning, 24 engineered features, stratified 70/15/15 split, leak-free scaling, tokeniser metadata export. |
 | **3** | Tabular Tokenisation | `DONE` | Hybrid PAY state+severity tokenisation (Novelty N1) in [`src/tokenization/tokenizer.py`](src/tokenization/tokenizer.py); feature embedding with [CLS], optional temporal positional encoding, and MTLM `[MASK]` support in [`src/tokenization/embedding.py`](src/tokenization/embedding.py). |
 | **4** | Transformer (From Scratch) | `DONE` | Attention ([`src/models/attention.py`](src/models/attention.py) + `attn_bias` hook), PreNorm encoder ([`src/models/transformer.py`](src/models/transformer.py) — `FeedForward`, `TransformerBlock`, `TemporalDecayBias` Novelty N3, `FeatureGroupBias` Novelty N2, `TransformerEncoder`), and the top-level [`TabularTransformer`](src/models/model.py) wiring tokeniser → embedding → encoder → pool → 2-layer MLP head → logit. Parameter budget: ~28 K. |
 | **5** | Losses & Supervised Training | `DONE` | Focal / weighted-BCE / label-smoothing BCE losses ([`src/training/losses.py`](src/training/losses.py)); AdamW + cosine-warmup schedule, gradient clipping, early stopping, optional stratified batching, optional two-stage LR for MTLM fine-tuning, optional multi-task PAY_0 auxiliary head (Novelty N5), ensembling helpers in [`src/training/train.py`](src/training/train.py) + [`src/models/model.py`](src/models/model.py). Every run writes `{train,val,test}_metrics.json` and `{train,val,test}_predictions.npz`. |
@@ -846,7 +846,7 @@ Feature Engineering (22 features) ──> Stratified Split (70/15/15)
 | **Schema** | Normalise column names | `PAY_1` to `PAY_0`, drop `ID` |
 | **Cleaning** | Merge undocumented codes | `EDUCATION {0,5,6}` to `4`, `MARRIAGE {0}` to `3` |
 | **Validation** | Data quality audit | 0 missing values, 35 duplicates (0.12%), all ranges valid |
-| **Engineering** | 22 derived features | Utilisation ratios, repayment ratios, delinquency aggregates, bill slope |
+| **Engineering** | 24 derived features | Utilisation ratios, repayment ratios, delinquency aggregates, bill slope, payment dynamics, aggregate totals |
 | **Splitting** | Stratified three-way | 22.12% default rate preserved in all splits |
 | **Scaling** | StandardScaler (train only) | Applied to val/test without leakage |
 | **Metadata** | JSON export | Category mappings and feature statistics for tokeniser |
@@ -857,10 +857,10 @@ Feature Engineering (22 features) ──> Stratified Split (70/15/15)
 |:---|:---:|:---|
 | `UTIL_RATIO_1--6` | 6 | Credit utilisation per month |
 | `REPAY_RATIO_1--6` | 6 | Repayment fraction per month |
-| Delinquency aggregates | 5 | Delay count, max delay, trend, no-use months |
-| Bill dynamics | 2 | Linear slope, average utilisation |
-| Payment dynamics | 2 | Average payment, payment volatility |
-| Balance totals | 1 | Aggregate payment-to-bill ratio |
+| Delinquency aggregates | 5 | `N_MONTHS_DELAYED`, `MAX_DELAY`, `RECENT_DELAY`, `DELAY_TREND`, `N_MONTHS_NO_USE` |
+| Bill dynamics | 2 | `BILL_SLOPE`, `AVG_UTIL_RATIO` |
+| Payment dynamics | 2 | `AVG_PAY_AMT`, `PAY_AMT_VOLATILITY` |
+| Aggregate totals | 3 | `TOTAL_BILL`, `TOTAL_PAY`, `PAY_BILL_RATIO_TOTAL` |
 
 <br>
 
