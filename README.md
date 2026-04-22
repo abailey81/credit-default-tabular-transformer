@@ -106,11 +106,11 @@ the order `run_all.py` invokes them:
    poetry run python scripts/run_pipeline.py --eda-only
    # or interactively: notebooks/01_exploratory_data_analysis.ipynb
    ```
-3. **Random Forest benchmark**
+3. **Random Forest benchmark** — runs the full 200-iter `RandomizedSearchCV` and retunes hyperparameters from scratch. Parallel execution (`n_jobs=-1`) means the final test-set numbers may drift by ~10⁻⁴ across reruns. Use step 4 below to reproduce the committed numbers exactly.
    ```bash
    poetry run python -m src.baselines.random_forest
    ```
-4. **RF prediction regenerator** (writes `results/baseline/rf/test_predictions.npz`)
+4. **RF prediction regenerator** — **the deterministic path**. Loads the committed best hyperparameters from [`results/baseline/rf_config.json`](results/baseline/rf_config.json) and refits the RF with `random_state=42`. Bit-identical test-set numbers (AUC 0.7845, F1 0.5462, ECE 0.0123) every run. Writes `results/baseline/rf/test_predictions.npz`.
    ```bash
    poetry run python -m src.baselines.rf_predictions
    ```
@@ -867,6 +867,8 @@ Feature Engineering (22 features) ──> Stratified Split (70/15/15)
 ## Random Forest Benchmark
 
 The RF benchmark (`src/baselines/random_forest.py`) provides a strong tree-based baseline for comparison against the Transformer. It reuses the **shared preprocessing pipeline** to ensure identical data transformations.
+
+> **Reproducibility note.** `random_forest.py` runs a full 200-iter `RandomizedSearchCV` on every call; with `n_jobs=-1` the parallel-evaluation order can produce small drift (~10⁻⁴ on AUC) across reruns, even with a fixed `random_state`. To reproduce the exact committed numbers (AUC 0.7845, F1 0.5462, ECE 0.0123), run [`src/baselines/rf_predictions.py`](src/baselines/rf_predictions.py) instead — it skips tuning and refits directly from the committed `rf_config.json` with `random_state=42`.
 
 ### Pipeline
 
