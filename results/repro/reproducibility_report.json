@@ -55,12 +55,11 @@
     {
       "name": "git_clean",
       "passed": true,
-      "detail": "3 tracked changes",
+      "detail": "2 tracked changes",
       "metadata": {
         "dirty_files": [
           " M poetry.lock",
-          " M pyproject.toml",
-          " M results/repro/reproducibility_report.json"
+          " M pyproject.toml"
         ],
         "is_clean": false
       }

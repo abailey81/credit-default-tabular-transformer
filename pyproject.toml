@@ -31,7 +31,15 @@ flake8 = "^7.0"
 flake8-pyproject = "^1.2"
 mypy = "^1.5"
 pre-commit = "^3.4"
-jupyter = "^1.1.1"
+# Jupyter: we ship the CLASSIC notebook (notebook 6.x) rather than the
+# `jupyter` meta-package. `jupyter` pulls in `jupyterlab`, which in turn
+# pulls `jupyterlab-widgets>=3.0.16` — that wheel contains webpack chunk
+# paths like
+# `share/jupyter/labextensions/@jupyter-widgets/jupyterlab-manager/static/packages_base_lib_index_js-webpack_sharing_consume_default_jquery_jquery.<hash>.js`
+# which exceeds Windows MAX_PATH (260) inside a typical poetry venv and
+# makes `poetry install` abort. `notebook` 6.x + `ipykernel` covers the
+# four `.ipynb` files under `notebooks/` without the JupyterLab surface.
+notebook = "^6.5"
 ipykernel = "^6.29"
 
 [build-system]
