@@ -152,6 +152,78 @@ the order `run_all.py` invokes them:
 Every invocation uses `poetry run` to avoid venv-activation footguns; on Windows
 set `PYTHONIOENCODING=utf-8` in the shell so stage modules can emit unicode logs.
 
+### Install troubleshooting
+
+If `poetry install` aborts on `Cannot install jupyterlab-widgets` (a
+Windows-long-path quirk, not a project bug), every non-Jupyter package has
+already installed successfully — you can ignore the failure and continue.
+Confirm with:
+
+```bash
+poetry run python -c "import torch, numpy, pandas, sklearn; print('core deps OK')"
+poetry run python -m src.infra.repro        # must print 7/7 PASS
+```
+
+If `poetry.lock` complains about being out of sync with `pyproject.toml`:
+
+```bash
+poetry lock
+poetry install
+```
+
+To force a truly clean venv:
+
+```bash
+poetry env remove --all
+poetry install
+```
+
+### Everything-in-one command reference
+
+Copy-paste these in order for a full end-to-end run from a clean clone (set
+`MPLBACKEND=Agg` + `PYTHONIOENCODING=utf-8` on Windows to avoid matplotlib-tk
+and cp1252 footguns):
+
+```bash
+# 0. Install
+poetry install
+
+# 1. One-shot full pipeline (preprocess -> EDA -> RF -> 3 supervised seeds ->
+#    MTLM pretrain + fine-tune -> evaluate + visualise + calibration + fairness
+#    + uncertainty + significance + interpret -> 7-check repro gate)
+MPLBACKEND=Agg PYTHONIOENCODING=utf-8 poetry run python scripts/run_all.py
+
+# 1a. Faster smoke variant (one seed, tiny MC-dropout + bootstrap budgets)
+MPLBACKEND=Agg PYTHONIOENCODING=utf-8 poetry run python scripts/run_all.py \
+    --n-samples 5 --n-resamples 200 --seeds 42
+
+# 2. Individual stages (skip straight to a specific one; see Option B above
+#    for the full 11-step breakdown)
+poetry run python scripts/run_pipeline.py --preprocess-only
+poetry run python scripts/run_pipeline.py --eda-only
+poetry run python -m src.baselines.random_forest
+poetry run python -m src.baselines.rf_predictions
+poetry run python -m src.training.train      --seed 42 --output-dir results/transformer/seed_42
+poetry run python -m src.training.train      --seed 1  --output-dir results/transformer/seed_1
+poetry run python -m src.training.train      --seed 2  --output-dir results/transformer/seed_2
+poetry run python -m src.training.train_mtlm --seed 42 --output-dir results/mtlm/run_42
+poetry run python -m src.training.train      --seed 42 \
+    --pretrained-encoder results/mtlm/run_42/encoder_pretrained.pt \
+    --output-dir results/transformer/seed_42_mtlm_finetune
+poetry run python -m src.evaluation.evaluate
+poetry run python -m src.evaluation.visualise
+poetry run python -m src.evaluation.calibration
+poetry run python -m src.evaluation.fairness
+poetry run python -m src.evaluation.uncertainty --n-samples 50
+poetry run python -m src.evaluation.significance --n-resamples 2000
+poetry run python -m src.evaluation.interpret
+poetry run python -m src.infra.repro
+
+# 3. Verify
+poetry run pytest tests/ -q                  # 320 pass, deterministic
+poetry run python -m src.infra.repro         # 7 of 7 checks PASS
+```
+
 <br>
 
 ## Project Roadmap

@@ -55,29 +55,12 @@
     {
       "name": "git_clean",
       "passed": true,
-      "detail": "51 tracked changes",
+      "detail": "3 tracked changes",
       "metadata": {
         "dirty_files": [
-          " M README.md",
-          " M data/README.md",
-          " M data/processed/README.md",
-          " M data/processed/splits/README.md",
-          " M data/raw/README.md",
-          " M docs/README.md",
-          " M figures/README.md",
-          " M figures/baseline/README.md",
-          " M figures/eda/README.md",
-          " M figures/evaluation/README.md",
-          " M figures/evaluation/calibration/README.md",
-          " M figures/evaluation/comparison/README.md",
-          " M figures/evaluation/fairness/README.md",
-          " M figures/evaluation/interpret/README.md",
-          " M figures/evaluation/significance/README.md",
-          " M figures/evaluation/uncertainty/README.md",
-          " M notebooks/README.md",
-          " M results/README.md",
-          " M results/analysis/README.md",
-          " M results/baseline/README.md"
+          " M poetry.lock",
+          " M pyproject.toml",
+          " M results/repro/reproducibility_report.json"
         ],
         "is_clean": false
       }
