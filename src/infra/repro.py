@@ -118,6 +118,49 @@ def _sha256(path: Path) -> str:
     return h.hexdigest()
 
 
+def _compare_json_tolerant(got: Any, want: Any, path: str = "") -> list[str]:
+    """Walk two parsed JSON trees and return a list of mismatches. Floats
+    are compared with ``rtol=1e-3, atol=1e-4`` (handles BLAS-level drift in
+    computed statistics like means/stds); ints / strings / bools / nulls
+    are compared exactly."""
+    mismatches: list[str] = []
+    if isinstance(want, dict):
+        if not isinstance(got, dict):
+            mismatches.append(f"{path or '<root>'}: type dict vs {type(got).__name__}")
+            return mismatches
+        for key in want:
+            if key not in got:
+                mismatches.append(f"{path}/{key}: missing")
+                continue
+            mismatches.extend(_compare_json_tolerant(got[key], want[key], f"{path}/{key}"))
+        for key in got:
+            if key not in want:
+                mismatches.append(f"{path}/{key}: unexpected key")
+    elif isinstance(want, list):
+        if not isinstance(got, list):
+            mismatches.append(f"{path}: type list vs {type(got).__name__}")
+            return mismatches
+        if len(got) != len(want):
+            mismatches.append(f"{path}: length {len(got)} vs {len(want)}")
+            return mismatches
+        for i, (g, w) in enumerate(zip(got, want)):
+            mismatches.extend(_compare_json_tolerant(g, w, f"{path}[{i}]"))
+    elif isinstance(want, bool) or isinstance(got, bool):
+        # bool before float because isinstance(True, int) is True in Python.
+        if got != want:
+            mismatches.append(f"{path}: {got!r} vs {want!r}")
+    elif isinstance(want, float) or isinstance(got, float):
+        try:
+            if not np.isclose(float(got), float(want), rtol=1e-3, atol=1e-4):
+                mismatches.append(f"{path}: {got} vs {want}")
+        except (TypeError, ValueError):
+            mismatches.append(f"{path}: {got!r} vs {want!r}")
+    else:
+        if got != want:
+            mismatches.append(f"{path}: {got!r} vs {want!r}")
+    return mismatches
+
+
 def _run(cmd: list[str], cwd: Path) -> tuple[int, str, str]:
     """Subprocess wrapper returning ``(rc, stdout, stderr)``."""
     proc = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True)
@@ -381,7 +424,8 @@ def check_split_hashes_match(repo: Path) -> Check:
 
     expected_splits: dict[str, dict[str, Any]] = expected.get("splits", {})
     expected_jsons: dict[str, str] = expected.get("json_files", {})
-    if not expected_splits and not expected_jsons:
+    expected_metadata: dict[str, Any] = expected.get("json_metadata", {})
+    if not expected_splits and not expected_jsons and not expected_metadata:
         return Check(
             name="split_hashes_match",
             passed=False,
@@ -454,7 +498,8 @@ def check_split_hashes_match(repo: Path) -> Check:
                 )
                 continue
 
-    # Strict SHA-256 check for JSON metadata (deterministic byte-for-byte).
+    # Strict SHA-256 check for JSON metadata (legacy path; left in place for
+    # any pre-existing entries that callers haven't migrated yet).
     for name, want_sha in expected_jsons.items():
         path = processed_root / name
         if not path.is_file():
@@ -467,8 +512,29 @@ def check_split_hashes_match(repo: Path) -> Check:
                 f"{name}: sha {got_sha[:12]}... vs {want_sha[:12]}..."
             )
 
+    # Tolerant content-comparison for JSON metadata (handles BLAS float drift
+    # in computed numerical statistics like means/stds).
+    for name, want_content in expected_metadata.items():
+        path = processed_root / name
+        if not path.is_file():
+            mismatches.append(f"{name}: missing")
+            continue
+        try:
+            with path.open(encoding="utf-8") as fh:
+                got_content = json.load(fh)
+        except (json.JSONDecodeError, OSError) as e:
+            mismatches.append(f"{name}: parse error ({e})")
+            continue
+        checked.append(name)
+        json_diffs = _compare_json_tolerant(got_content, want_content, name)
+        if json_diffs:
+            sample = json_diffs[:3]
+            mismatches.append(
+                f"{name}: {len(json_diffs)} field(s) drifted: {sample}"
+            )
+
     ok = not mismatches
-    total = len(expected_splits) + len(expected_jsons)
+    total = len(expected_splits) + len(expected_jsons) + len(expected_metadata)
     return Check(
         name="split_hashes_match",
         passed=ok,
