@@ -23,6 +23,36 @@
 
 <br>
 
+> ## ⚠️ Before you install: Python version
+>
+> **This project requires Python 3.10, 3.11, or 3.12.** Python 3.13 and 3.14 will fail at `poetry install`.
+>
+> This is intentional. The pipeline pins **PyTorch 2.2.x** to guarantee bit-identical numerical reproducibility of every result in `results/` (see [Appendix 7 of the report](#) for the manifest). PyTorch 2.2 only ships pre-built wheels for Python 3.8–3.12, so newer Pythons cannot install it.
+>
+> **If your machine has a newer Python:** install one of the supported versions alongside it:
+>
+> ```bash
+> # macOS
+> brew install python@3.12
+>
+> # Ubuntu / Debian
+> sudo apt install python3.12
+>
+> # Windows
+> winget install Python.Python.3.12
+> ```
+>
+> Then point Poetry at it:
+>
+> ```bash
+> poetry env use python3.12
+> poetry install
+> ```
+>
+> **GitHub Codespaces and Google Colab work out of the box** — both come with Python 3.11 preinstalled.
+
+<br>
+
 ## Start here
 
 New to this repo? Pick one:
